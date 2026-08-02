@@ -1,0 +1,9 @@
+calle-ai==0.2.0
+fastapi
+uvicorn
+sqlalchemy
+alembic
+psycopg[binary]
+pydantic-settings
+python-dotenv
+anthropic
