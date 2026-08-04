@@ -1,6 +1,16 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -24,6 +34,11 @@ class Patient(Base):
     consent_on_file: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    needs_followup: Mapped[bool] = mapped_column(Boolean, default=False, nullable=True)
+    protocol_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("disease_protocols.id"), nullable=True
+    )
+    protocol: Mapped["DiseaseProtocol"] = relationship(back_populates="patients")
 
     followups: Mapped[list["FollowUp"]] = relationship(
         "FollowUp",
@@ -98,3 +113,94 @@ class Symptom(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     call: Mapped["Call"] = relationship("Call", back_populates="symptoms")
+
+
+class DiseaseProtocol(Base):
+    __tablename__ = "disease_protocols"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    needs_followup_default: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    questions: Mapped[list["ProtocolQuestion"]] = relationship(
+        back_populates="protocol",
+        cascade="all, delete-orphan",
+        order_by="ProtocolQuestion.sort_order",
+    )
+    emergency_keywords: Mapped[list["ProtocolEmergencyKeyword"]] = relationship(
+        back_populates="protocol",
+        cascade="all, delete-orphan",
+    )
+    result_fields: Mapped[list["ProtocolResultField"]] = relationship(
+        back_populates="protocol",
+        cascade="all, delete-orphan",
+        order_by="ProtocolResultField.sort_order",
+    )
+    patients: Mapped[list["Patient"]] = relationship(back_populates="protocol")
+
+
+class ProtocolQuestion(Base):
+    __tablename__ = "protocol_questions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    protocol_id: Mapped[int] = mapped_column(
+        ForeignKey("disease_protocols.id", ondelete="CASCADE"), index=True,
+    )
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    protocol: Mapped["DiseaseProtocol"] = relationship(back_populates="questions")
+
+
+class ProtocolEmergencyKeyword(Base):
+    __tablename__ = "protocol_emergency_keywords"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    protocol_id: Mapped[int] = mapped_column(
+        ForeignKey("disease_protocols.id", ondelete="CASCADE"), index=True
+    )
+    keyword: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    protocol: Mapped["DiseaseProtocol"] = relationship(
+        back_populates="emergency_keywords"
+    )
+
+
+class ProtocolResultField(Base):
+    __tablename__ = "protocol_result_fields"
+    __table_args__ = (UniqueConstraint("protocol_id", "field_key"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    protocol_id: Mapped[int] = mapped_column(
+        ForeignKey("disease_protocols.id", ondelete="CASCADE"), index=True
+    )
+    field_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    field_type: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # string|integer|boolean|number
+    description: Mapped[str | None] = mapped_column(Text)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    minimum: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    maximum: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    protocol: Mapped["DiseaseProtocol"] = relationship(back_populates="result_fields")
+    enums: Mapped[list["ProtocolResultFieldEnum"]] = relationship(
+        back_populates="field",
+        cascade="all, delete-orphan",
+        order_by="ProtocolResultFieldEnum.sort_order",
+    )
+
+
+class ProtocolResultFieldEnum(Base):
+    __tablename__ = "protocol_result_field_enums"
+    __table_args__ = (UniqueConstraint("field_id", "value"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    field_id: Mapped[int] = mapped_column(
+        ForeignKey("protocol_result_fields.id"), index=True
+    )
+    value: Mapped[str] = mapped_column(String(128), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    field: Mapped["ProtocolResultField"] = relationship(back_populates="enums")

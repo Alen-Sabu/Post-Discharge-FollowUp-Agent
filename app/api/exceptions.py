@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from app.services.call_service import TriggerError
 from app.services.followup_service import FollowUpServiceError
 from app.services.patient_service import PatientServiceError
+from app.services.protocol_service import ProtocolServiceError
 from app.services.webhook_service import WebhookServiceError
 
 
@@ -32,3 +33,12 @@ def raise_http_from_followup_error(exc: FollowUpServiceError) -> None:
 
 def raise_http_from_webhook_error(exc: WebhookServiceError) -> None:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+def raise_http_from_protocol_error(exc: ProtocolServiceError) -> None:
+    detail = str(exc)
+    code = (
+        status.HTTP_404_NOT_FOUND
+        if "not found" in detail.lower()
+        else status.HTTP_400_BAD_REQUEST
+    )
+    raise HTTPException(status_code=code, detail=detail) from exc

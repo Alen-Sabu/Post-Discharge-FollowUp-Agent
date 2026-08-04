@@ -5,6 +5,7 @@ from app.models.orm import Call
 from app.repositories.call_repository import CallRepository
 from app.repositories.followup_repository import FollowUpRepository
 from app.repositories.patient_repository import PatientRepository
+from app.services.protocol_service import ProtocolService
 
 
 class TriggerError(Exception):
@@ -17,10 +18,12 @@ class CallService:
         patients: PatientRepository,
         followups: FollowUpRepository,
         calls: CallRepository,
+        protocols: ProtocolService,
     ):
         self.patients = patients
         self.followups = followups
         self.calls = calls
+        self.protocols = protocols
 
     def trigger(
         self,
@@ -42,6 +45,13 @@ class CallService:
         if not patient.consent_on_file and not dry_run:
             raise TriggerError("Patient has not provided consent")
 
+        try:
+            protocol = self.protocols.get_for_patient(patient)
+            task = self.protocols.build_task(patient, protocol)
+            result_schema = self.protocols.build_result_schema(protocol)
+        except Exception as exc:
+            raise TriggerError(str(exc)) from exc
+
         call = Call(
             patient_id=patient.id,
             followup_id=followup.id if followup else None,
@@ -55,6 +65,9 @@ class CallService:
             result = place_call(
                 patient=patient,
                 followup=followup,
+                task=task,
+                result_schema=result_schema,
+                protocol=protocol,
                 dry_run=dry_run,
                 internal_call_id=call.id,
             )

@@ -8,8 +8,7 @@ from calle import CalleClient
 from calle.errors import CalleWebhookSignatureError
 
 from app.config import settings
-from app.models.orm import FollowUp, Patient
-
+from app.models.orm import DiseaseProtocol, FollowUp, Patient
 
 FOLLOWUP_RESULT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -74,35 +73,13 @@ def _infer_region(phone: str) -> str:
         return "US"
     return "IN"
 
-
-def _build_task(patient: Patient) -> str:
-    diagnosis = patient.discharge_diagnosis or "a recent hospital discharge"
-    doctor = patient.doctor_name or "their care team"
-    discharge = (
-        patient.discharge_date.isoformat()
-        if patient.discharge_date
-        else "recently"
-    )
-
-    return (
-        f"Call {patient.phone}. You are a hospital post-discharge follow-up assistant "
-        f"calling on behalf of {doctor}. "
-        f"The patient's name is {patient.name}. They were discharged on {discharge} "
-        f"after {diagnosis}. "
-        "Be warm, brief, and clear. Confirm you are speaking with the patient. "
-        "Ask how they are feeling overall, whether they have pain (0-10), whether they "
-        "are taking medications as prescribed, and whether they have any concerning "
-        "symptoms such as chest pain, severe shortness of breath, fainting, or confusion. "
-        "If they report emergency symptoms, advise them to seek urgent care / emergency "
-        "services and end the call politely. "
-        "Do not diagnose or prescribe. Keep the call under 3 minutes."
-    )
-
-
 def place_call(
     patient: Patient,
     followup: FollowUp | None = None,
     *,
+    task: str, 
+    result_schema: dict[str, Any],
+    protocol: DiseaseProtocol | None = None,
     dry_run: bool | None = None,
     internal_call_id: int | None = None,
     webhook_url: str | None = None,
@@ -119,6 +96,8 @@ def place_call(
         "patient_id": str(patient.id),
         "followup_id": str(followup.id) if followup else None,
         "internal_call_id": str(internal_call_id) if internal_call_id else None,
+        "protocol_id": str(protocol.id) if protocol else None,
+        "protocol_code": protocol.code if protocol else None,
     }
 
     if dry_run:
@@ -131,6 +110,8 @@ def place_call(
                 "id": fake_id,
                 "status": "dry_run",
                 "metadata": metadata,
+                "task": task,
+                "result_schema": result_schema,
                 "message": "Dry run only — no CALL-E request was sent.",
             },
         )
@@ -139,7 +120,7 @@ def place_call(
 
     client = _get_client()
     response = client.calls.create(
-        task=_build_task(patient),
+        task=task,
         recipients=[
             {
                 "phones": [patient.phone],
@@ -147,7 +128,7 @@ def place_call(
                 "locale": "en-IN" if patient.phone.startswith("+91") else "en-US",
             }
         ],
-        result_schema=FOLLOWUP_RESULT_SCHEMA,
+        result_schema=result_schema,
         metadata=metadata,
         webhook_url=resolved_webhook,
         idempotency_key=(
@@ -182,7 +163,6 @@ def unwrap_webhook(raw_body: bytes, headers: dict[str, str], secret: str) -> dic
 __all__ = [
     "CallEResult",
     "CalleWebhookSignatureError",
-    "FOLLOWUP_RESULT_SCHEMA",
     "place_call",
     "unwrap_webhook",
 ]

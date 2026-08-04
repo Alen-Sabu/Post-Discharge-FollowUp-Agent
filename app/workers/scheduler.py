@@ -7,8 +7,9 @@ from app.db import SessionLocal
 from app.repositories.call_repository import CallRepository
 from app.repositories.followup_repository import FollowUpRepository
 from app.repositories.patient_repository import PatientRepository
+from app.repositories.protocol_repository import ProtocolRepository
 from app.services.call_service import CallService
-
+from app.services.protocol_service import ProtocolService
 
 scheduler = BackgroundScheduler()
 
@@ -20,6 +21,7 @@ def process_due_followups() -> None:
             PatientRepository(db),
             FollowUpRepository(db),
             CallRepository(db),
+            ProtocolService(ProtocolRepository(db)),
         )
         service.process_due_followups(dry_run=settings.dry_run_default)
     finally:
