@@ -9,6 +9,7 @@ from app.repositories.patient_repository import PatientRepository
 from app.repositories.symptom_repository import SymptomRepository
 from app.services.ai_service import analyze_transcript
 from app.services.notification_service import notify_emergency
+from app.services.protocol_service import ProtocolService
 
 _PROCESSED_EVENT_IDS: set[str] = set()
 
@@ -77,7 +78,9 @@ def _first_recipient_structured_result(data: dict[str, Any]) -> dict[str, Any] |
         return None
 
     for recipient in recipients:
-        if isinstance(recipient, dict) and isinstance(recipient.get("structured_result"), dict):
+        if isinstance(recipient, dict) and isinstance(
+            recipient.get("structured_result"), dict
+        ):
             return recipient["structured_result"]
     return None
 
@@ -88,10 +91,12 @@ class WebhookService:
         calls: CallRepository,
         patients: PatientRepository,
         symptoms: SymptomRepository,
+        protocols: ProtocolService,
     ):
         self.calls = calls
         self.patients = patients
         self.symptoms = symptoms
+        self.protocols = protocols
 
     def _find_call(self, data: dict[str, Any]) -> Call | None:
         metadata = data.get("metadata", {})
@@ -113,7 +118,9 @@ class WebhookService:
 
         return None
 
-    def process_calle_event(self, event_id: str, event_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    def process_calle_event(
+        self, event_id: str, event_type: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
         if event_id in _PROCESSED_EVENT_IDS:
             return {"ok": True, "duplicate": True, "event_id": event_id}
 
@@ -158,9 +165,19 @@ class WebhookService:
         if structured_result is None:
             structured_result = _first_recipient_structured_result(data)
 
+        patient = self.patients.get_by_id(call.patient_id)
+        extra_keywords = (
+            self.protocols.get_emergency_keywords_for_patient(patient)
+            if patient
+            else None
+        )
+
         analysis = analyze_transcript(
             transcript=transcript,
-            structured_result=structured_result if isinstance(structured_result, dict) else None,
+            structured_result=structured_result
+            if isinstance(structured_result, dict)
+            else None,
+            extra_emergency_keywords=extra_keywords,
         )
 
         call.summary = analysis.summary or call.summary
@@ -179,7 +196,6 @@ class WebhookService:
         ]
         self.symptoms.replace_for_call(call.id, symptom_rows)
 
-        patient = self.patients.get_by_id(call.patient_id)
         if patient and _is_worse(analysis.risk_level, patient.current_risk_level):
             patient.current_risk_level = analysis.risk_level
             self.patients.save(patient)

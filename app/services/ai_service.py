@@ -84,11 +84,23 @@ def _is_negated(text: str, match_start: int, lookback_words: int = 4) -> bool:
     window = before_words[-lookback_words:] if before_words else []
     return any(word.strip(".,!?;:") in NEGATION_WORDS for word in window)
     
-def detect_emergency_keywords(transcript: str) -> list[str]: 
+def _merge_keywords(extra: list[str] | None = None) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for phrase in EMERGENCY_KEYWORDS + (extra or []):
+        normalized = _normalize(phrase)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+    return merged 
+
+
+def detect_emergency_keywords(transcript: str, *, extra_keywords: list[str] | None = None) -> list[str]: 
     text = _normalize(_patient_only_text(transcript))
     matched: list[str] = []
 
-    for phrase in EMERGENCY_KEYWORDS:
+    for phrase in _merge_keywords(extra_keywords):
         search_from = 0
         while True:
             idx = text.find(phrase, search_from)
@@ -245,8 +257,9 @@ def analyze_transcript(
     *, 
     transcript: str,
     structured_result: dict[str, Any] | None = None,
+    extra_emergency_keywords: list[str] | None = None,
 ) -> AnalysisResult:
-    matched_keywords = detect_emergency_keywords(transcript)
+    matched_keywords = detect_emergency_keywords(transcript, extra_keywords=extra_emergency_keywords)
     keyword_emergency = bool(matched_keywords)
 
     source="rules"

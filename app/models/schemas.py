@@ -4,16 +4,93 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+# --- Protocol schemas ---
+
+class ProtocolQuestionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    question_text: str
+    sort_order: int
+    is_required: bool
+    is_active: bool
+
+
+class ProtocolEmergencyKeywordRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    keyword: str
+    is_active: bool
+
+
+class ProtocolResultFieldEnumRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    value: str
+    sort_order: int
+
+
+class ProtocolResultFieldRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    field_key: str
+    field_type: str
+    description: str | None = None
+    is_required: bool
+    sort_order: int
+    minimum: int | None = None
+    maximum: int | None = None
+    is_active: bool
+    enums: list[ProtocolResultFieldEnumRead] = []
+
+
+class DiseaseProtocolListItem(BaseModel):
+    """Dropdown item for frontend."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    name: str
+    description: str | None = None
+    needs_followup_default: bool
+
+
+class DiseaseProtocolDetail(BaseModel):
+    """Full protocol preview + generated CALL-E schema."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    name: str
+    description: str | None = None
+    needs_followup_default: bool
+    is_active: bool
+    questions: list[ProtocolQuestionRead] = []
+    emergency_keywords: list[ProtocolEmergencyKeywordRead] = []
+    result_fields: list[ProtocolResultFieldRead] = []
+    result_schema_preview: dict[str, Any] | None = None
+
+
+# --- Patient schemas ---
+
 class PatientCreate(BaseModel):
     name: str
     phone: str = Field(..., description="E.164 phone, eg: +15555550100")
-    age: int | None = None 
-    gender: str | None = None 
-    doctor_name: str | None = None 
-    doctor_contact: str | None = None 
-    discharge_date: date | None = None 
-    discharge_diagnosis: str | None = None 
+    age: int | None = None
+    gender: str | None = None
+    doctor_name: str | None = None
+    doctor_contact: str | None = None
+    discharge_date: date | None = None
+    discharge_diagnosis: str | None = None  # optional free-text note
     consent_on_file: bool = False
+    protocol_id: int  # required from disease dropdown
+    needs_followup: bool = False
+
+    followup_scheduled_time: datetime | None = None
+
 
 class PatientRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -29,12 +106,17 @@ class PatientRead(BaseModel):
     discharge_diagnosis: str | None = None
     current_risk_level: str
     consent_on_file: bool
+    protocol_id: int | None = None
+    needs_followup: bool = False
 
+
+# --- Follow-up / call / webhook schemas ---
 
 class FollowUpCreate(BaseModel):
     patient_id: int
     scheduled_time: datetime
     max_attempts: int = 3
+
 
 class FollowUpRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -46,10 +128,12 @@ class FollowUpRead(BaseModel):
     attempt_count: int
     max_attempts: int
 
+
 class CallTriggerRequest(BaseModel):
     patient_id: int
     followup_id: int | None = None
     dry_run: bool = True
+
 
 class SymptomRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -59,8 +143,10 @@ class SymptomRead(BaseModel):
     severity: str | None = None
     note: str | None = None
 
+
 class CallRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     patient_id: int
     followup_id: int | None = None
