@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.orm import DiseaseProtocol, Patient
-from app.models.schemas import DiseaseProtocolDetail
+from app.models.schemas import DiseaseProtocolCreate, DiseaseProtocolDetail
 from app.repositories.protocol_repository import ProtocolRepository
+
+ALLOWED_FIELD_TYPES = {"string", "integer", "boolean", "number"}
 
 
 class ProtocolServiceError(Exception):
@@ -23,6 +25,17 @@ class ProtocolService:
         if not protocol:
             raise ProtocolServiceError("Protocol not found")
         return protocol
+
+    def create(self, payload: DiseaseProtocolCreate) -> DiseaseProtocolDetail:
+        code = payload.code.strip()
+        if self.protocols.get_by_code(code):
+            raise ProtocolServiceError(f"Protocol code already exists: {code}")
+
+        self._validate_create_payload(payload)
+        protocol = self.protocols.create(payload.model_copy(update={"code": code}))
+        return DiseaseProtocolDetail.model_validate(protocol).model_copy(
+            update={"result_schema_preview": self.build_result_schema(protocol)}
+        )
 
     def get_for_patient(self, patient: Patient) -> DiseaseProtocol:
         if not patient.protocol_id:
@@ -109,6 +122,26 @@ class ProtocolService:
         return DiseaseProtocolDetail.model_validate(protocol).model_copy(
             update={"result_schema_preview": self.build_result_schema(protocol)}
         )
+
+    def _validate_create_payload(self, payload: DiseaseProtocolCreate) -> None:
+        if not any(q.question_text.strip() for q in payload.questions):
+            raise ProtocolServiceError("At least one question is required")
+
+        if not any(f.field_key.strip() for f in payload.result_fields):
+            raise ProtocolServiceError("At least one result field is required")
+
+        seen_keys: set[str] = set()
+        for field in payload.result_fields:
+            key = field.field_key.strip()
+            if key in seen_keys:
+                raise ProtocolServiceError(f"Duplicate result field key: {key}")
+            seen_keys.add(key)
+
+            if field.field_type not in ALLOWED_FIELD_TYPES:
+                raise ProtocolServiceError(
+                    f"Invalid field_type '{field.field_type}' for {key}. "
+                    f"Allowed: {', '.join(sorted(ALLOWED_FIELD_TYPES))}"
+                )
 
     def _validate_protocol_ready(self, protocol: DiseaseProtocol) -> None:
         active_questions = [q for q in protocol.questions if q.is_active]

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+from datetime import datetime
 from typing import Any
 
+from app.core.datetimes import to_naive_utc, utc_now_naive
 from app.models.orm import Call, Symptom
 from app.repositories.call_repository import CallRepository
 from app.repositories.patient_repository import PatientRepository
 from app.repositories.symptom_repository import SymptomRepository
+from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.services.ai_service import analyze_transcript
-from app.services.notification_service import notify_emergency
+from app.services.notification_service import NotificationService
 from app.services.protocol_service import ProtocolService
 
-_PROCESSED_EVENT_IDS: set[str] = set()
+logger = logging.getLogger(__name__)
 
 RISK_RANK = {
     "low": 1,
@@ -92,11 +95,15 @@ class WebhookService:
         patients: PatientRepository,
         symptoms: SymptomRepository,
         protocols: ProtocolService,
+        webhook_events: WebhookEventRepository,
+        notifications: NotificationService,
     ):
         self.calls = calls
         self.patients = patients
         self.symptoms = symptoms
         self.protocols = protocols
+        self.webhook_events = webhook_events
+        self.notifications = notifications
 
     def _find_call(self, data: dict[str, Any]) -> Call | None:
         metadata = data.get("metadata", {})
@@ -118,32 +125,129 @@ class WebhookService:
 
         return None
 
+    def _metadata(self, data: dict[str, Any]) -> dict[str, Any]:
+        metadata = data.get("metadata", {})
+        return metadata if isinstance(metadata, dict) else {}
+
+    def _internal_call_id(self, data: dict[str, Any]) -> int | None:
+        raw = self._metadata(data).get("internal_call_id")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _is_doctor_warning(self, data: dict[str, Any]) -> bool:
+        if self._metadata(data).get("purpose") == "doctor_warning":
+            return True
+        provider_call_id = data.get("id")
+        if not provider_call_id:
+            return False
+        return self.notifications.is_warning_call(str(provider_call_id))
+
     def process_calle_event(
         self, event_id: str, event_type: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        if event_id in _PROCESSED_EVENT_IDS:
-            return {"ok": True, "duplicate": True, "event_id": event_id}
-
         if event_type not in TERMINAL_TYPES:
             return {"ok": True, "ignored": True, "event_type": event_type}
+
+        if self._is_doctor_warning(data):
+            return self._process_doctor_warning_event(
+                event_id=event_id,
+                event_type=event_type,
+                data=data,
+            )
 
         call = self._find_call(data)
         if not call:
             raise WebhookServiceError("matching call record not found")
 
-        _PROCESSED_EVENT_IDS.add(event_id)
+        claimed = self.webhook_events.try_claim(
+            event_id=event_id,
+            event_type=event_type,
+            call_id=call.id,
+        )
+        if claimed is None:
+            return {"ok": True, "duplicate": True, "event_id": event_id}
 
+        try:
+            result = self._process_claimed_event(
+                event_id=event_id,
+                event_type=event_type,
+                data=data,
+                call=call,
+            )
+            self.webhook_events.mark_processed(claimed, call_id=call.id)
+            return result
+        except Exception as exc:
+            self.webhook_events.mark_failed(
+                claimed,
+                error=str(exc),
+                call_id=call.id,
+            )
+            raise
+
+    def _process_doctor_warning_event(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        internal_call_id = self._internal_call_id(data)
+        claimed = self.webhook_events.try_claim(
+            event_id=event_id,
+            event_type=event_type,
+            call_id=internal_call_id,
+        )
+        if claimed is None:
+            return {"ok": True, "duplicate": True, "event_id": event_id}
+
+        try:
+            row = self.notifications.mark_warning_call_terminal(
+                provider_call_id=str(data.get("id") or "") or None,
+                internal_call_id=internal_call_id,
+                status=str(data.get("status") or ""),
+                event_type=event_type,
+            )
+            self.webhook_events.mark_processed(claimed, call_id=internal_call_id)
+            return {
+                "ok": True,
+                "event_id": event_id,
+                "type": event_type,
+                "purpose": "doctor_warning",
+                "notification_id": row.id if row else None,
+                "status": row.status if row else "unknown",
+            }
+        except Exception as exc:
+            self.webhook_events.mark_failed(
+                claimed,
+                error=str(exc),
+                call_id=internal_call_id,
+            )
+            raise
+
+    def _process_claimed_event(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        data: dict[str, Any],
+        call: Call,
+    ) -> dict[str, Any]:
         call.calle_call_id = str(data.get("id") or call.calle_call_id)
         call.status = str(data.get("status") or call.status)
         if data.get("completed_at"):
             try:
-                call.call_end = datetime.fromisoformat(
+                parsed = datetime.fromisoformat(
                     str(data["completed_at"]).replace("Z", "+00:00")
                 )
+                call.call_end = to_naive_utc(parsed)
             except ValueError:
-                call.call_end = datetime.now(timezone.utc)
+                call.call_end = utc_now_naive()
         else:
-            call.call_end = datetime.now(timezone.utc)
+            call.call_end = utc_now_naive()
 
         if data.get("summary"):
             call.summary = data["summary"]
@@ -152,6 +256,7 @@ class WebhookService:
         call.transcript = transcript or call.transcript
 
         if event_type == "call.failed" or call.status in {"failed", "canceled"}:
+            self._reopen_followup_for_retry(call)
             self.calls.save(call)
             return {
                 "ok": True,
@@ -203,7 +308,7 @@ class WebhookService:
         self.calls.save(call)
 
         if call.is_emergency and patient is not None:
-            notify_emergency(patient=patient, call=call)
+            self.notifications.notify_emergency(patient=patient, call=call)
 
         return {
             "ok": True,
@@ -213,3 +318,28 @@ class WebhookService:
             "risk_level": call.risk_level,
             "is_emergency": call.is_emergency,
         }
+
+    def _reopen_followup_for_retry(self, call: Call) -> None:
+        followup = call.followup
+        if followup is None:
+            return
+        if followup.status not in {"completed", "in_progress"}:
+            return
+        if followup.attempt_count >= followup.max_attempts:
+            followup.status = "failed"
+            logger.info(
+                "Follow-up %s marked failed after call %s (attempts %s/%s)",
+                followup.id,
+                call.id,
+                followup.attempt_count,
+                followup.max_attempts,
+            )
+            return
+        followup.status = "pending"
+        logger.info(
+            "Follow-up %s reopened for retry after call %s failed (attempts %s/%s)",
+            followup.id,
+            call.id,
+            followup.attempt_count,
+            followup.max_attempts,
+        )

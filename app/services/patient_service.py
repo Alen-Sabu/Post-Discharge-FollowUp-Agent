@@ -1,5 +1,4 @@
-from datetime import datetime, timezone
-
+from app.core.datetimes import to_naive_utc
 from app.models.orm import FollowUp, Patient
 from app.models.schemas import PatientCreate
 from app.repositories.followup_repository import FollowUpRepository
@@ -49,9 +48,7 @@ class PatientService:
         patient = self.patients.create(patient)
 
         if patient.needs_followup:
-            scheduled = payload.followup_scheduled_time or datetime.now(timezone.utc)
-            if scheduled.tzinfo is None:
-                scheduled = scheduled.replace(tzinfo=timezone.utc)
+            scheduled = to_naive_utc(payload.followup_scheduled_time)
             self.followups.create(
                 FollowUp(
                     patient_id=patient.id,

@@ -1,7 +1,53 @@
 from datetime import date, datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+# --- Auth schemas ---
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    full_name: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: EmailStr
+    full_name: str
+    is_active: bool
+    created_at: datetime
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class AuthRegisterResponse(BaseModel):
+    user: UserRead
+    tokens: TokenPair
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 # --- Protocol schemas ---
@@ -72,6 +118,46 @@ class DiseaseProtocolDetail(BaseModel):
     emergency_keywords: list[ProtocolEmergencyKeywordRead] = []
     result_fields: list[ProtocolResultFieldRead] = []
     result_schema_preview: dict[str, Any] | None = None
+
+
+class ProtocolQuestionCreate(BaseModel):
+    question_text: str = Field(..., min_length=1)
+    sort_order: int = 0
+    is_required: bool = True
+
+
+class ProtocolEmergencyKeywordCreate(BaseModel):
+    keyword: str = Field(..., min_length=1)
+
+
+class ProtocolResultFieldEnumCreate(BaseModel):
+    value: str = Field(..., min_length=1)
+    sort_order: int = 0
+
+
+class ProtocolResultFieldCreate(BaseModel):
+    field_key: str = Field(..., min_length=1, max_length=128)
+    field_type: str = Field(
+        ...,
+        description="string | integer | boolean | number",
+    )
+    description: str | None = None
+    is_required: bool = True
+    sort_order: int = 0
+    minimum: int | None = None
+    maximum: int | None = None
+    enums: list[ProtocolResultFieldEnumCreate] = []
+
+
+class DiseaseProtocolCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    needs_followup_default: bool = True
+    is_active: bool = True
+    questions: list[ProtocolQuestionCreate] = Field(..., min_length=1)
+    emergency_keywords: list[ProtocolEmergencyKeywordCreate] = []
+    result_fields: list[ProtocolResultFieldCreate] = Field(..., min_length=1)
 
 
 # --- Patient schemas ---
@@ -196,3 +282,250 @@ class CalleWebhookEvent(BaseModel):
     type: str  # call.completed | call.failed | call.result_validation_failed
     created_at: str | None = None
     data: CalleWebhookData
+
+# --- Dashboard schemas ---
+
+class RiskCountMap(BaseModel):
+    low: int = 0
+    medium: int = 0
+    high: int = 0
+    critical: int = 0
+
+
+class DashboardSummary(BaseModel):
+    patients_total: int
+    patients_needing_followup: int
+    patients_missing_consent: int
+    patients_by_risk: RiskCountMap
+    protocols_active: int
+    protocols_total: int
+    followups_pending: int
+    followups_overdue: int
+    calls_in_range: int
+    emergencies_in_range: int
+    live_calls_in_range: int
+    dry_run_calls_in_range: int
+
+
+class TimeSeriesPoint(BaseModel):
+    date: str
+    count: int
+
+
+class NamedCount(BaseModel):
+    key: str
+    label: str | None = None
+    count: int
+
+
+class DashboardCharts(BaseModel):
+    calls_per_day: list[TimeSeriesPoint]
+    emergencies_per_day: list[TimeSeriesPoint]
+    patients_by_risk: list[NamedCount]
+    patients_by_protocol: list[NamedCount]
+    calls_by_status: list[NamedCount]
+    calls_by_risk: list[NamedCount]
+    followups_by_status: list[NamedCount]
+
+
+class AttentionPatientItem(BaseModel):
+    id: int
+    name: str
+    risk_level: str
+    protocol_name: str | None = None
+    needs_followup: bool = False
+
+
+class AttentionFollowUpItem(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    scheduled_time: datetime
+    attempt_count: int
+
+
+class AttentionEmergencyItem(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    risk_level: str | None = None
+    call_start: datetime | None = None
+
+
+class DashboardAttention(BaseModel):
+    high_risk_patients: list[AttentionPatientItem]
+    overdue_followups: list[AttentionFollowUpItem]
+    recent_emergencies: list[AttentionEmergencyItem]
+
+
+class DashboardActivityItem(BaseModel):
+    id: str
+    type: str
+    title: str
+    subtitle: str | None = None
+    occurred_at: datetime
+    patient_id: int | None = None
+    call_id: int | None = None
+    followup_id: int | None = None
+    severity: str | None = None
+
+
+class DashboardOverview(BaseModel):
+    generated_at: datetime
+    range_days: int
+    summary: DashboardSummary
+    charts: DashboardCharts
+    attention: DashboardAttention
+    recent_activity: list[DashboardActivityItem]
+
+
+# --- Agent schemas ---
+
+class AgentMessage(BaseModel):
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., min_length=1, max_length=8000)
+
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    history: list[AgentMessage] = Field(default_factory=list)
+
+
+class AgentKpiItem(BaseModel):
+    key: str
+    label: str
+    value: int | str
+
+
+class AgentKpiGridBlock(BaseModel):
+    type: Literal["kpi_grid"] = "kpi_grid"
+    title: str
+    items: list[AgentKpiItem]
+
+
+class AgentPatientListItem(BaseModel):
+    patient_id: int
+    name: str | None = None
+    risk_level: str | None = None
+    diagnosis: str | None = None
+    protocol: str | None = None
+    doctor_name: str | None = None
+    discharge_date: date | None = None
+    needs_followup: bool | None = None
+
+
+class AgentPatientTableBlock(BaseModel):
+    type: Literal["patient_table"] = "patient_table"
+    title: str
+    count: int
+    description: str | None = None
+    items: list[AgentPatientListItem]
+
+
+class AgentSymptomItem(BaseModel):
+    name: str
+    severity: str | None = None
+    note: str | None = None
+
+
+class AgentCallItem(BaseModel):
+    call_id: int
+    patient_id: int | None = None
+    patient_name: str | None = None
+    status: str | None = None
+    risk_level: str | None = None
+    is_emergency: bool | None = None
+    summary: str | None = None
+    call_start: datetime | None = None
+    symptoms: list[AgentSymptomItem] = Field(default_factory=list)
+
+
+class AgentEmergencyListBlock(BaseModel):
+    type: Literal["emergency_list"] = "emergency_list"
+    title: str
+    count: int
+    items: list[AgentCallItem]
+
+
+class AgentPatientDetailItem(BaseModel):
+    patient_id: int
+    name: str
+    age: int | None = None
+    gender: str | None = None
+    doctor_name: str | None = None
+    discharge_date: date | None = None
+    diagnosis: str | None = None
+    risk_level: str | None = None
+    needs_followup: bool | None = None
+    consent_on_file: bool | None = None
+    protocol: str | None = None
+
+
+class AgentPatientDetailBlock(BaseModel):
+    type: Literal["patient_detail"] = "patient_detail"
+    title: str
+    patient: AgentPatientDetailItem
+    recent_calls: list[AgentCallItem] = Field(default_factory=list)
+
+
+class AgentAmbiguousPatientsBlock(BaseModel):
+    type: Literal["ambiguous_patients"] = "ambiguous_patients"
+    title: str
+    query: str
+    count: int
+    message: str
+    candidates: list[AgentPatientListItem]
+
+
+class AgentPatientSearchItem(AgentPatientListItem):
+    context_text: str
+    distance: float
+
+
+class AgentPatientSearchBlock(BaseModel):
+    type: Literal["patient_search_results"] = "patient_search_results"
+    title: str
+    query: str
+    unavailable: bool = False
+    reason: str | None = None
+    items: list[AgentPatientSearchItem] = Field(default_factory=list)
+
+
+class AgentCallSearchItem(AgentCallItem):
+    context_text: str
+    distance: float
+
+
+class AgentCallSearchBlock(BaseModel):
+    type: Literal["call_search_results"] = "call_search_results"
+    title: str
+    query: str
+    unavailable: bool = False
+    reason: str | None = None
+    items: list[AgentCallSearchItem] = Field(default_factory=list)
+
+
+class AgentNoticeBlock(BaseModel):
+    type: Literal["notice"] = "notice"
+    title: str
+    message: str
+    tone: Literal["info", "warning"] = "info"
+
+
+AgentBlock = Annotated[
+    AgentKpiGridBlock
+    | AgentPatientTableBlock
+    | AgentEmergencyListBlock
+    | AgentPatientDetailBlock
+    | AgentAmbiguousPatientsBlock
+    | AgentPatientSearchBlock
+    | AgentCallSearchBlock
+    | AgentNoticeBlock,
+    Field(discriminator="type"),
+]
+
+
+class AgentChatResponse(BaseModel):
+    reply: str
+    tool_calls_used: list[str] = Field(default_factory=list)
+    blocks: list[AgentBlock] = Field(default_factory=list)

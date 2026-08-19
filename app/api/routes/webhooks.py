@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-
 from app.api.dependencies import get_webhook_service
 from app.api.exceptions import raise_http_from_webhook_error
 from app.config import settings
 from app.integrations.calle import CalleWebhookSignatureError, unwrap_webhook
 from app.models.schemas import CalleWebhookEvent
 from app.services.webhook_service import WebhookService, WebhookServiceError
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 router = APIRouter()
 
@@ -22,11 +21,6 @@ async def calle_webhook(
     raw_body = await request.body()
 
     if not settings.calle_webhook_secret:
-        if settings.app_env != "local":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Webhook secret is required outside local development",
-            )
         try:
             event_dict = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

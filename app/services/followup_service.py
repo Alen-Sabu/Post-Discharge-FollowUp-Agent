@@ -1,3 +1,4 @@
+from app.core.datetimes import to_naive_utc
 from app.models.orm import FollowUp
 from app.models.schemas import FollowUpCreate
 from app.repositories.followup_repository import FollowUpRepository
@@ -24,7 +25,7 @@ class FollowUpService:
 
         followup = FollowUp(
             patient_id=payload.patient_id,
-            scheduled_time=payload.scheduled_time,
+            scheduled_time=to_naive_utc(payload.scheduled_time),
             max_attempts=payload.max_attempts,
             status="pending",
             attempt_count=0,

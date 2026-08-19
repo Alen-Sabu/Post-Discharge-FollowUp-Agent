@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, status
-
-from app.api.dependencies import get_call_service
+from app.api.dependencies import get_call_service, get_current_user
 from app.api.exceptions import raise_http_from_trigger_error
+from app.models.orm import User
 from app.models.schemas import CallRead, CallTriggerRequest
 from app.services.call_service import CallService, TriggerError
+from fastapi import APIRouter, Depends, status
 
 router = APIRouter()
 
@@ -15,6 +15,7 @@ router = APIRouter()
 )
 def trigger_call(
     payload: CallTriggerRequest,
+    _: User = Depends(get_current_user),
     service: CallService = Depends(get_call_service),
 ):
     try:
@@ -28,12 +29,19 @@ def trigger_call(
 
 
 @router.get("", response_model=list[CallRead])
-def list_calls(service: CallService = Depends(get_call_service)):
+def list_calls(
+    _: User = Depends(get_current_user),
+    service: CallService = Depends(get_call_service),
+):
     return service.list()
 
 
 @router.get("/{call_id}", response_model=CallRead)
-def get_call(call_id: int, service: CallService = Depends(get_call_service)):
+def get_call(
+    call_id: int,
+    _: User = Depends(get_current_user),
+    service: CallService = Depends(get_call_service),
+):
     try:
         return service.get(call_id)
     except TriggerError as exc:

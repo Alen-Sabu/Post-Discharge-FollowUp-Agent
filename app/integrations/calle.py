@@ -4,11 +4,10 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from calle import CalleClient
-from calle.errors import CalleWebhookSignatureError
-
 from app.config import settings
 from app.models.orm import DiseaseProtocol, FollowUp, Patient
+from calle import CalleClient
+from calle.errors import CalleWebhookSignatureError
 
 FOLLOWUP_RESULT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -146,6 +145,85 @@ def place_call(
     )
 
 
+DOCTOR_WARNING_RESULT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["acknowledged", "will_follow_up", "notes"],
+    "properties": {
+        "acknowledged": {
+            "type": "boolean",
+            "description": "Whether the doctor confirmed they received the emergency alert.",
+        },
+        "will_follow_up": {
+            "type": "boolean",
+            "description": "Whether the doctor said they will contact or follow up with the patient.",
+        },
+        "notes": {
+            "type": "string",
+            "description": "Short notes from the doctor about next steps.",
+        },
+    },
+}
+
+
+def place_warning_call(
+    *,
+    doctor_phone: str,
+    task: str,
+    patient: Patient,
+    internal_call_id: int,
+    dry_run: bool | None = None,
+    webhook_url: str | None = None,
+) -> CallEResult:
+    """Place a CALL-E warning call to the patient's doctor."""
+    if dry_run is None:
+        dry_run = settings.dry_run_default
+
+    metadata = {
+        "purpose": "doctor_warning",
+        "patient_id": str(patient.id),
+        "internal_call_id": str(internal_call_id),
+    }
+
+    if dry_run:
+        fake_id = f"dryrun_doc_{uuid4().hex[:12]}"
+        return CallEResult(
+            provider_call_id=fake_id,
+            status="dry_run",
+            dry_run=True,
+            raw_response={
+                "id": fake_id,
+                "status": "dry_run",
+                "metadata": metadata,
+                "task": task,
+                "message": "Dry run only — no CALL-E doctor warning call was sent.",
+            },
+        )
+
+    resolved_webhook = webhook_url or settings.calle_webhook_url
+    client = _get_client()
+    response = client.calls.create(
+        task=task,
+        recipients=[
+            {
+                "phones": [doctor_phone],
+                "region": _infer_region(doctor_phone),
+                "locale": "en-IN" if doctor_phone.startswith("+91") else "en-US",
+            }
+        ],
+        result_schema=DOCTOR_WARNING_RESULT_SCHEMA,
+        metadata=metadata,
+        webhook_url=resolved_webhook,
+        idempotency_key=f"doctor-warning-{internal_call_id}",
+    )
+
+    return CallEResult(
+        provider_call_id=str(response["id"]) if response.get("id") else None,
+        status=str(response.get("status", "queued")),
+        dry_run=False,
+        raw_response=response,
+    )
+
+
 def unwrap_webhook(raw_body: bytes, headers: dict[str, str], secret: str) -> dict[str, Any]:
     """Verify and unwrap a CALL-E webhook payload. Raises CalleWebhookSignatureError."""
     client = CalleClient(
@@ -164,5 +242,6 @@ __all__ = [
     "CallEResult",
     "CalleWebhookSignatureError",
     "place_call",
+    "place_warning_call",
     "unwrap_webhook",
 ]

@@ -5,21 +5,25 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
-from app.integrations.anthropic import extract_facts_from_transcript
+from app.integrations.anthropic import extract_facts_with_claude
+from app.integrations.google import extract_facts_with_gemini
+
 
 @dataclass
-class SymptomResult: 
-    name: str 
-    severity: str | None = None 
-    note: str | None = None 
+class SymptomResult:
+    name: str
+    severity: str | None = None
+    note: str | None = None
+
 
 @dataclass
-class AnalysisResult: 
-    summary: str 
-    risk_score: float 
+class AnalysisResult:
+    summary: str
+    risk_score: float
     risk_level: str
-    is_emergency: bool 
+    is_emergency: bool
     symptoms: list[SymptomResult] = field(default_factory=list)
+
 
 EMERGENCY_KEYWORDS = [
     "chest pain",
@@ -57,7 +61,15 @@ NEGATION_WORDS = {
     "denied",
 }
 
-def _normalize(text: str) -> str: 
+
+def _llm_available() -> bool:
+    return bool(
+        settings.llm_enabled
+        and (settings.google_api_key or settings.anthropic_api_key)
+    )
+
+
+def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower()).strip()
 
 
@@ -83,7 +95,8 @@ def _is_negated(text: str, match_start: int, lookback_words: int = 4) -> bool:
     before_words = before.split()
     window = before_words[-lookback_words:] if before_words else []
     return any(word.strip(".,!?;:") in NEGATION_WORDS for word in window)
-    
+
+
 def _merge_keywords(extra: list[str] | None = None) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -93,10 +106,12 @@ def _merge_keywords(extra: list[str] | None = None) -> list[str]:
             continue
         seen.add(normalized)
         merged.append(normalized)
-    return merged 
+    return merged
 
 
-def detect_emergency_keywords(transcript: str, *, extra_keywords: list[str] | None = None) -> list[str]: 
+def detect_emergency_keywords(
+    transcript: str, *, extra_keywords: list[str] | None = None
+) -> list[str]:
     text = _normalize(_patient_only_text(transcript))
     matched: list[str] = []
 
@@ -109,19 +124,20 @@ def detect_emergency_keywords(transcript: str, *, extra_keywords: list[str] | No
 
             if not _is_negated(text, idx):
                 matched.append(phrase)
-                break 
+                break
 
             search_from = idx + len(phrase)
 
     return matched
 
+
 def score_risk(
-    *, 
+    *,
     is_emergency: bool,
-    pain_level: int | None, 
-    medication_compliance: str | None, 
-    feeling_overall: str | None, 
-    emergency_from_structured: bool = False, 
+    pain_level: int | None,
+    medication_compliance: str | None,
+    feeling_overall: str | None,
+    emergency_from_structured: bool = False,
     followup_concerns: list[str] | None = None,
 ) -> tuple[float, str]:
     """
@@ -136,17 +152,17 @@ def score_risk(
     score = 0.0
 
     if pain_level is not None:
-        if pain_level >= 8: 
-            score += 40 
-        elif pain_level >= 4: 
-            score += 20 
+        if pain_level >= 8:
+            score += 40
+        elif pain_level >= 4:
+            score += 20
         elif pain_level >= 1:
             score += 5
 
     compliance = (medication_compliance or "unknown").lower()
-    if compliance == "no": 
+    if compliance == "no":
         score += 30
-    elif compliance == "partial": 
+    elif compliance == "partial":
         score += 15
 
     feeling = (feeling_overall or "unknown").lower()
@@ -155,36 +171,35 @@ def score_risk(
     elif feeling == "same":
         score += 10
 
-    
     if followup_concerns:
         score += min(15, 5 * len(followup_concerns))
 
     score = min(100, score)
 
-    if score >= 70: 
+    if score >= 70:
         level = "high"
-    elif score >= 40: 
+    elif score >= 40:
         level = "medium"
     else:
         level = "low"
 
     return score, level
 
+
 def _coerce_pain(value: Any) -> int | None:
     if value is None:
         return None
-    try: 
+    try:
         pain = int(value)
     except (TypeError, ValueError):
         return None
     return max(0, min(10, pain))
 
+
 def extract_from_structured_result(
-    structured_result: dict[str, Any] | None, 
-) -> dict[str, Any]: 
-    """
-    Turn CALL-E structured result into a clean internal facts dict
-    """
+    structured_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Turn CALL-E structured result into a clean internal facts dict."""
 
     data = structured_result or {}
 
@@ -192,7 +207,7 @@ def extract_from_structured_result(
     symptoms: list[dict[str, Any]] = []
     if isinstance(symptoms_raw, list):
         for item in symptoms_raw:
-            if isinstance(item, dict) and item.get("name"): 
+            if isinstance(item, dict) and item.get("name"):
                 symptoms.append(item)
             elif isinstance(item, str):
                 symptoms.append({"name": item, "severity": None, "note": None})
@@ -214,20 +229,42 @@ def extract_from_structured_result(
     }
 
 
-def extract_with_llm(transcript: str) -> dict[str, Any]:
+def extract_with_llm(transcript: str) -> tuple[dict[str, Any], str]:
     """
-    Ask Claude for clinical facts only.
-    Do NOT ask it for the final risk label.
+    Ask LLM for clinical facts only.
+    Primary: Gemini. Secondary: Claude.
+    Do NOT ask either model for the final risk label.
     """
     if not transcript.strip():
-        return extract_from_structured_result(None)
+        return extract_from_structured_result(None), "rules"
 
-    parsed = extract_facts_from_transcript(transcript)
-    return extract_from_structured_result(parsed)
+    gemini_error: Exception | None = None
+
+    if settings.google_api_key:
+        try:
+            parsed = extract_facts_with_gemini(transcript)
+            return extract_from_structured_result(parsed), "gemini"
+        except Exception as exc:
+            gemini_error = exc
+
+    if settings.anthropic_api_key:
+        try:
+            parsed = extract_facts_with_claude(transcript)
+            return extract_from_structured_result(parsed), "claude_fallback"
+        except Exception as claude_error:
+            raise RuntimeError(
+                "Gemini and Claude clinical extraction both failed"
+            ) from claude_error
+
+    if gemini_error is not None:
+        raise RuntimeError("Gemini clinical extraction failed") from gemini_error
+
+    raise RuntimeError("No clinical extraction provider configured")
+
 
 def _build_symptoms(
-    extracted: dict[str, Any], 
-    matched_keywords: list[str], 
+    extracted: dict[str, Any],
+    matched_keywords: list[str],
 ) -> list[SymptomResult]:
     symptoms: list[SymptomResult] = []
 
@@ -235,9 +272,9 @@ def _build_symptoms(
         if isinstance(item, dict) and item.get("name"):
             symptoms.append(
                 SymptomResult(
-                    name = str(item["name"]),
-                    severity = str(item.get("severity") or "unknown"),
-                    note = str(item.get("note") or ""),
+                    name=str(item["name"]),
+                    severity=str(item.get("severity") or "unknown"),
+                    note=str(item.get("note") or ""),
                 )
             )
 
@@ -245,24 +282,27 @@ def _build_symptoms(
         if not any(s.name == phrase for s in symptoms):
             symptoms.append(
                 SymptomResult(
-                    name = phrase,
-                    severity = "severe", 
-                    note = "Detected by emergency keyword backstop",
+                    name=phrase,
+                    severity="severe",
+                    note="Detected by emergency keyword backstop",
                 )
             )
 
     return symptoms
 
+
 def analyze_transcript(
-    *, 
+    *,
     transcript: str,
     structured_result: dict[str, Any] | None = None,
     extra_emergency_keywords: list[str] | None = None,
 ) -> AnalysisResult:
-    matched_keywords = detect_emergency_keywords(transcript, extra_keywords=extra_emergency_keywords)
+    matched_keywords = detect_emergency_keywords(
+        transcript, extra_keywords=extra_emergency_keywords
+    )
     keyword_emergency = bool(matched_keywords)
 
-    source="rules"
+    source = "rules"
     extracted: dict[str, Any]
 
     has_usable_structured = bool(
@@ -285,21 +325,23 @@ def analyze_transcript(
         extracted = extract_from_structured_result(structured_result)
         source = "calle_structured"
 
+        # CALL-E payload exists but is sparse — fill gaps with LLM.
         thin = (
             not extracted.get("symptoms")
             and extracted.get("feeling_overall") == "unknown"
             and extracted.get("pain_level") is None
         )
 
-        if(thin and settings.llm_enabled and settings.anthropic_api_key and transcript.strip()):
+        if thin and _llm_available() and transcript.strip():
             try:
-                llm_extracted = extract_with_llm(transcript)
+                llm_extracted, provider = extract_with_llm(transcript)
                 for key in ("symptoms", "followup_concerns", "notes"):
                     if not extracted.get(key) and llm_extracted.get(key):
                         extracted[key] = llm_extracted[key]
                 if extracted.get("feeling_overall") == "unknown":
-                    extracted["feeling_overall"] = llm_extracted.get("feeling_overall") or "unknown"
-
+                    extracted["feeling_overall"] = (
+                        llm_extracted.get("feeling_overall") or "unknown"
+                    )
                 if extracted.get("pain_level") is None:
                     extracted["pain_level"] = llm_extracted.get("pain_level")
                 if extracted.get("medication_compliance") == "unknown":
@@ -310,33 +352,37 @@ def analyze_transcript(
                     extracted["emergency_symptoms_reported"] = bool(
                         llm_extracted.get("emergency_symptoms_reported")
                     )
-                source = "hybrid"
-            except Exception: 
-                pass 
-    elif settings.llm_enabled and settings.anthropic_api_key and transcript.strip():
-        try: 
-            extracted = extract_with_llm(transcript)
-            source = "llm"
-        except Exception: 
+                source = f"hybrid_{provider}"
+            except Exception:
+                pass
+    elif _llm_available() and transcript.strip():
+        # No usable CALL-E structured result — ask LLM directly.
+        try:
+            extracted, provider = extract_with_llm(transcript)
+            source = provider
+        except Exception:
             extracted = extract_from_structured_result(None)
             source = "rules"
-
     else:
         extracted = extract_from_structured_result(structured_result)
         source = "calle_structured" if structured_result else "rules"
+
+    # Kept for observability of which extraction path ran.
+    _ = source
 
     emergency_from_structured = bool(extracted.get("emergency_symptoms_reported"))
     is_emergency = keyword_emergency or emergency_from_structured
 
     risk_score, risk_level = score_risk(
-        is_emergency = is_emergency,
-        pain_level = extracted.get("pain_level"),
-        medication_compliance = extracted.get("medication_compliance"),
-        feeling_overall = extracted.get("feeling_overall"),
-        emergency_from_structured = emergency_from_structured,
-        followup_concerns = extracted.get("followup_concerns"),
+        is_emergency=is_emergency,
+        pain_level=extracted.get("pain_level"),
+        medication_compliance=extracted.get("medication_compliance"),
+        feeling_overall=extracted.get("feeling_overall"),
+        emergency_from_structured=emergency_from_structured,
+        followup_concerns=extracted.get("followup_concerns"),
     )
 
+    # Keyword backstop always wins for emergency safety.
     if keyword_emergency:
         is_emergency = True
         risk_level = "critical"
@@ -360,9 +406,9 @@ def analyze_transcript(
         )
 
     return AnalysisResult(
-        summary = "\n".join(summary_parts),
-        risk_score = risk_score,
-        risk_level = risk_level,
-        is_emergency = is_emergency,
-        symptoms = symptoms,
+        summary="\n".join(summary_parts),
+        risk_score=risk_score,
+        risk_level=risk_level,
+        is_emergency=is_emergency,
+        symptoms=symptoms,
     )

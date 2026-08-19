@@ -19,8 +19,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sqlalchemy.orm import Session
-
 from app.db import SessionLocal
 from app.models.orm import (
     DiseaseProtocol,
@@ -29,6 +27,7 @@ from app.models.orm import (
     ProtocolResultField,
     ProtocolResultFieldEnum,
 )
+from sqlalchemy.orm import Session
 
 DATA_DIR = Path(__file__).resolve().parent / "seed_data"
 
