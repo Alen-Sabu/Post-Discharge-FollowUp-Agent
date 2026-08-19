@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     calle_example_phone: str | None = None
 
     dry_run_default: bool
+    scheduler_interval_minutes: int = 1
+
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+    jwt_access_ttl_minutes: int = 30
+    jwt_refresh_ttl_days: int = 14
 
     anthropic_api_key: str | None = None
     llm_model: str = "claude-sonnet-4-20250514"
@@ -25,6 +31,11 @@ class Settings(BaseSettings):
     smtp_port: int | None = None
     smtp_username: str | None = None
     smtp_password: str | None = None
+
+    openai_api_key: str | None = None
+    agent_enabled: bool = True
+    google_api_key: str | None = None
+    agent_model: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -44,6 +55,9 @@ class Settings(BaseSettings):
         "smtp_port",
         "smtp_username",
         "smtp_password",
+        "openai_api_key",
+        "google_api_key",
+        "agent_model",
         mode="before",
     )
     @classmethod

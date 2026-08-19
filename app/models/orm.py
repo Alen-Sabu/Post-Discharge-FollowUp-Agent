@@ -1,5 +1,7 @@
 from datetime import date, datetime
 
+from app.db import Base
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     Date,
@@ -12,8 +14,6 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.db import Base
 
 
 class Patient(Base):
@@ -49,6 +49,17 @@ class Patient(Base):
     calls: Mapped[list["Call"]] = relationship(
         "Call",
         back_populates="patient",
+        cascade="all, delete-orphan",
+    )
+    notifications: Mapped[list["EmergencyNotification"]] = relationship(
+        "EmergencyNotification",
+        back_populates="patient",
+        cascade="all, delete-orphan",
+    )
+    embedding: Mapped["PatientEmbedding | None"] = relationship(
+        "PatientEmbedding",
+        back_populates="patient",
+        uselist=False,
         cascade="all, delete-orphan",
     )
 
@@ -99,6 +110,21 @@ class Call(Base):
     symptoms: Mapped[list["Symptom"]] = relationship(
         "Symptom", back_populates="call", cascade="all, delete-orphan"
     )
+    embedding: Mapped["CallEmbedding | None"] = relationship(
+        "CallEmbedding",
+        back_populates="call",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    notifications: Mapped[list["EmergencyNotification"]] = relationship(
+        "EmergencyNotification",
+        back_populates="call",
+        cascade="all, delete-orphan",
+    )
+    webhook_events: Mapped[list["WebhookEvent"]] = relationship(
+        "WebhookEvent",
+        back_populates="call",
+    )
 
 
 class Symptom(Base):
@@ -113,6 +139,77 @@ class Symptom(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     call: Mapped["Call"] = relationship("Call", back_populates="symptoms")
+
+
+class EmergencyNotification(Base):
+    """Outbox for emergency staff alerts (SMS first, then CALL-E warning call).
+
+    Doctor/care-team warning calls are stored here — not in ``calls``, which is
+    reserved for patient follow-up conversations.
+    """
+
+    __tablename__ = "emergency_notifications"
+    __table_args__ = (
+        UniqueConstraint("call_id", "channel", name="uq_emergency_notifications_call_channel"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    call_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("calls.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    patient_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("patients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pending", index=True
+    )
+    provider_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    message_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    call: Mapped["Call"] = relationship("Call", back_populates="notifications")
+    patient: Mapped["Patient"] = relationship("Patient", back_populates="notifications")
+
+
+class WebhookEvent(Base):
+    """Durable idempotency log for inbound CALL-E webhook deliveries."""
+
+    __tablename__ = "webhook_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    event_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, unique=True, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    call_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("calls.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pending", index=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    call: Mapped["Call | None"] = relationship("Call", back_populates="webhook_events")
 
 
 class DiseaseProtocol(Base):
@@ -204,3 +301,79 @@ class ProtocolResultFieldEnum(Base):
     value: Mapped[str] = mapped_column(String(128), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     field: Mapped["ProtocolResultField"] = relationship(back_populates="enums")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        "RefreshToken",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="refresh_tokens")
+
+
+class PatientEmbedding(Base):
+    __tablename__ = "patient_embeddings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    patient_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("patients.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    context_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    patient: Mapped["Patient"] = relationship("Patient", back_populates="embedding")
+
+
+class CallEmbedding(Base):
+    __tablename__ = "call_embeddings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    call_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("calls.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    context_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    call: Mapped["Call"] = relationship("Call", back_populates="embedding")

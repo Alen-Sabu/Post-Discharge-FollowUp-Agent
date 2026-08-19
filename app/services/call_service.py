@@ -1,11 +1,14 @@
-from datetime import datetime, timezone
+import logging
 
+from app.core.datetimes import utc_now_naive
 from app.integrations.calle import place_call
 from app.models.orm import Call
 from app.repositories.call_repository import CallRepository
 from app.repositories.followup_repository import FollowUpRepository
 from app.repositories.patient_repository import PatientRepository
 from app.services.protocol_service import ProtocolService
+
+logger = logging.getLogger(__name__)
 
 
 class TriggerError(Exception):
@@ -57,7 +60,7 @@ class CallService:
             followup_id=followup.id if followup else None,
             status="queued",
             dry_run=dry_run,
-            call_start=datetime.now(timezone.utc),
+            call_start=utc_now_naive(),
         )
         call = self.calls.create(call)
 
@@ -91,23 +94,42 @@ class CallService:
         return call
 
     def process_due_followups(self, *, dry_run: bool) -> None:
-        now = datetime.now(timezone.utc)
+        now = utc_now_naive()
         due = self.followups.get_due(now, limit=20)
 
+        if not due:
+            logger.info("No due follow-ups to trigger")
+            return
+
+        logger.info("Found %s due follow-up(s) to trigger", len(due))
         for followup in due:
             followup.status = "in_progress"
             followup.attempt_count += 1
             self.followups.save(followup)
 
             try:
-                self.trigger(
+                call = self.trigger(
                     patient_id=followup.patient_id,
                     followup_id=followup.id,
                     dry_run=dry_run,
                 )
                 followup.status = "completed"
                 self.followups.save(followup)
-            except TriggerError:
+                logger.info(
+                    "Triggered call id=%s followup=%s patient=%s status=%s dry_run=%s",
+                    call.id,
+                    followup.id,
+                    followup.patient_id,
+                    call.status,
+                    dry_run,
+                )
+            except TriggerError as exc:
+                logger.warning(
+                    "Failed to trigger followup=%s patient=%s: %s",
+                    followup.id,
+                    followup.patient_id,
+                    exc,
+                )
                 if followup.attempt_count >= followup.max_attempts:
                     followup.status = "failed"
                 else:

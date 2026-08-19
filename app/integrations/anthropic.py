@@ -5,7 +5,6 @@ import re
 from typing import Any
 
 from anthropic import Anthropic
-
 from app.config import settings
 
 EXTRACTION_SCHEMA_HINT = {
@@ -69,7 +68,7 @@ def _parse_llm_json(text: str) -> dict[str, Any]:
     return json.loads(cleaned)
 
 
-def extract_facts_from_transcript(transcript: str) -> dict[str, Any]:
+def extract_facts_with_claude(transcript: str) -> dict[str, Any]:
     """Ask Claude for clinical facts only. Do not ask for the final risk label."""
     client = _get_client()
 
