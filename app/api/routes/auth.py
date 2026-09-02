@@ -1,4 +1,8 @@
-from app.api.dependencies import get_auth_service, get_current_user
+from app.api.dependencies import (
+    get_auth_service,
+    get_current_user,
+    require_register_secret,
+)
 from app.api.exceptions import raise_http_from_auth_error
 from app.models.orm import User
 from app.models.schemas import (
@@ -24,6 +28,7 @@ router = APIRouter()
 )
 def register(
     payload: UserCreate,
+    _: None = Depends(require_register_secret),
     service: AuthService = Depends(get_auth_service),
 ):
     try:
