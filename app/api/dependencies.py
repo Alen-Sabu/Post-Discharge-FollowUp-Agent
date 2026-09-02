@@ -1,4 +1,7 @@
+import secrets
+
 import jwt
+from app.config import settings
 from app.core.security import decode_access_token
 from app.db import get_db
 from app.models.orm import User
@@ -24,14 +27,37 @@ from app.services.patient_service import PatientService
 from app.services.protocol_service import ProtocolService
 from app.services.webhook_service import WebhookService
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 bearer_scheme = HTTPBearer(auto_error=False)
+register_secret_header = APIKeyHeader(
+    name="X-Register-Secret",
+    auto_error=False,
+    scheme_name="RegisterSecret",
+)
 
 
 def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
     return AuthService(UserRepository(db))
+
+
+def require_register_secret(
+    provided: str | None = Depends(register_secret_header),
+) -> None:
+    expected = settings.register_secret
+    if not expected:
+        if settings.is_deployed:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Registration is not configured",
+            )
+        return
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid register secret",
+        )
 
 
 def get_current_user(

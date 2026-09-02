@@ -1,7 +1,25 @@
+from __future__ import annotations
+
+import re
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from app.core.datetimes import to_naive_utc
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+RiskLevelLiteral = Literal["low", "medium", "high", "critical"]
+FollowUpStatusLiteral = Literal[
+    "pending", "in_progress", "completed", "failed", "cancelled"
+]
+E164_PATTERN = r"^\+[1-9]\d{7,14}$"
+E164_RE = re.compile(E164_PATTERN)
+
+
+def _normalize_optional_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return to_naive_utc(value)
+
 
 # --- Auth schemas ---
 
@@ -121,61 +139,85 @@ class DiseaseProtocolDetail(BaseModel):
 
 
 class ProtocolQuestionCreate(BaseModel):
-    question_text: str = Field(..., min_length=1)
-    sort_order: int = 0
+    question_text: str = Field(..., min_length=1, max_length=2000)
+    sort_order: int = Field(default=0, ge=0, le=1000)
     is_required: bool = True
 
 
 class ProtocolEmergencyKeywordCreate(BaseModel):
-    keyword: str = Field(..., min_length=1)
+    keyword: str = Field(..., min_length=1, max_length=255)
 
 
 class ProtocolResultFieldEnumCreate(BaseModel):
-    value: str = Field(..., min_length=1)
-    sort_order: int = 0
+    value: str = Field(..., min_length=1, max_length=128)
+    sort_order: int = Field(default=0, ge=0, le=1000)
 
 
 class ProtocolResultFieldCreate(BaseModel):
     field_key: str = Field(..., min_length=1, max_length=128)
-    field_type: str = Field(
+    field_type: Literal["string", "integer", "boolean", "number"] = Field(
         ...,
         description="string | integer | boolean | number",
     )
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=2000)
     is_required: bool = True
-    sort_order: int = 0
+    sort_order: int = Field(default=0, ge=0, le=1000)
     minimum: int | None = None
     maximum: int | None = None
-    enums: list[ProtocolResultFieldEnumCreate] = []
+    enums: list[ProtocolResultFieldEnumCreate] = Field(
+        default_factory=list, max_length=50
+    )
 
 
 class DiseaseProtocolCreate(BaseModel):
     code: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=255)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=4000)
     needs_followup_default: bool = True
     is_active: bool = True
-    questions: list[ProtocolQuestionCreate] = Field(..., min_length=1)
-    emergency_keywords: list[ProtocolEmergencyKeywordCreate] = []
-    result_fields: list[ProtocolResultFieldCreate] = Field(..., min_length=1)
+    questions: list[ProtocolQuestionCreate] = Field(..., min_length=1, max_length=50)
+    emergency_keywords: list[ProtocolEmergencyKeywordCreate] = Field(
+        default_factory=list, max_length=100
+    )
+    result_fields: list[ProtocolResultFieldCreate] = Field(
+        ..., min_length=1, max_length=50
+    )
 
 
 # --- Patient schemas ---
 
 class PatientCreate(BaseModel):
-    name: str
-    phone: str = Field(..., description="E.164 phone, eg: +15555550100")
-    age: int | None = None
-    gender: str | None = None
-    doctor_name: str | None = None
-    doctor_contact: str | None = None
+    name: str = Field(..., min_length=1, max_length=255)
+    phone: str = Field(
+        ...,
+        description="E.164 phone, eg: +15555550100",
+        pattern=E164_PATTERN,
+        max_length=32,
+    )
+    age: int | None = Field(default=None, ge=0, le=130)
+    gender: str | None = Field(default=None, max_length=50)
+    doctor_name: str | None = Field(default=None, max_length=255)
+    doctor_contact: str | None = Field(default=None, max_length=32)
     discharge_date: date | None = None
-    discharge_diagnosis: str | None = None  # optional free-text note
+    discharge_diagnosis: str | None = Field(default=None, max_length=4000)
     consent_on_file: bool = False
-    protocol_id: int  # required from disease dropdown
+    protocol_id: int = Field(..., gt=0)
     needs_followup: bool = False
-
     followup_scheduled_time: datetime | None = None
+
+    @field_validator("doctor_contact")
+    @classmethod
+    def validate_doctor_contact(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not E164_RE.match(value):
+            raise ValueError("doctor_contact must be a valid E.164 number")
+        return value
+
+    @field_validator("followup_scheduled_time")
+    @classmethod
+    def normalize_followup_time(cls, value: datetime | None) -> datetime | None:
+        return _normalize_optional_utc(value)
 
 
 class PatientRead(BaseModel):
@@ -190,7 +232,7 @@ class PatientRead(BaseModel):
     doctor_contact: str | None = None
     discharge_date: date | None = None
     discharge_diagnosis: str | None = None
-    current_risk_level: str
+    current_risk_level: RiskLevelLiteral | str
     consent_on_file: bool
     protocol_id: int | None = None
     needs_followup: bool = False
@@ -199,9 +241,14 @@ class PatientRead(BaseModel):
 # --- Follow-up / call / webhook schemas ---
 
 class FollowUpCreate(BaseModel):
-    patient_id: int
+    patient_id: int = Field(..., gt=0)
     scheduled_time: datetime
-    max_attempts: int = 3
+    max_attempts: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("scheduled_time")
+    @classmethod
+    def normalize_scheduled_time(cls, value: datetime) -> datetime:
+        return to_naive_utc(value)
 
 
 class FollowUpRead(BaseModel):
@@ -210,14 +257,14 @@ class FollowUpRead(BaseModel):
     id: int
     patient_id: int
     scheduled_time: datetime
-    status: str
+    status: FollowUpStatusLiteral | str
     attempt_count: int
     max_attempts: int
 
 
 class CallTriggerRequest(BaseModel):
-    patient_id: int
-    followup_id: int | None = None
+    patient_id: int = Field(..., gt=0)
+    followup_id: int | None = Field(default=None, gt=0)
     dry_run: bool = True
 
 
@@ -225,9 +272,9 @@ class SymptomRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int | None = None
-    name: str
-    severity: str | None = None
-    note: str | None = None
+    name: str = Field(..., max_length=255)
+    severity: str | None = Field(default=None, max_length=50)
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class CallRead(BaseModel):
@@ -240,7 +287,7 @@ class CallRead(BaseModel):
     status: str
     summary: str | None = None
     risk_score: float | None = None
-    risk_level: str | None = None
+    risk_level: RiskLevelLiteral | str | None = None
     is_emergency: bool
     transcript: str | None = None
     dry_run: bool
@@ -251,36 +298,36 @@ class TranscriptTurn(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     offset_seconds: int | None = None
-    speaker: str | None = None
-    text: str | None = None
+    speaker: str | None = Field(default=None, max_length=64)
+    text: str | None = Field(default=None, max_length=8000)
 
 
 class CalleWebhookData(BaseModel):
     """Terminal call task object under event.data."""
     model_config = ConfigDict(extra="allow")
 
-    id: str
-    object: str | None = None
-    status: str | None = None
-    task: str | None = None
-    recipients: list[dict[str, Any]] = []
+    id: str = Field(..., min_length=1, max_length=255)
+    object: str | None = Field(default=None, max_length=64)
+    status: str | None = Field(default=None, max_length=64)
+    task: str | None = Field(default=None, max_length=20000)
+    recipients: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     structured_result: dict[str, Any] | None = None
-    summary: str | None = None
+    summary: str | None = Field(default=None, max_length=8000)
     task_completed: bool | None = None
     metadata: dict[str, Any] | None = None
-    failure_code: str | None = None
-    failure_message: str | None = None
-    created_at: str | None = None
-    completed_at: str | None = None
+    failure_code: str | None = Field(default=None, max_length=128)
+    failure_message: str | None = Field(default=None, max_length=2000)
+    created_at: str | None = Field(default=None, max_length=64)
+    completed_at: str | None = Field(default=None, max_length=64)
 
 
 class CalleWebhookEvent(BaseModel):
     """Top-level CALL-E webhook event envelope."""
     model_config = ConfigDict(extra="allow")
 
-    id: str
-    type: str  # call.completed | call.failed | call.result_validation_failed
-    created_at: str | None = None
+    id: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(..., min_length=1, max_length=100)
+    created_at: str | None = Field(default=None, max_length=64)
     data: CalleWebhookData
 
 # --- Dashboard schemas ---
@@ -331,7 +378,7 @@ class DashboardCharts(BaseModel):
 class AttentionPatientItem(BaseModel):
     id: int
     name: str
-    risk_level: str
+    risk_level: RiskLevelLiteral | str
     protocol_name: str | None = None
     needs_followup: bool = False
 
@@ -388,7 +435,7 @@ class AgentMessage(BaseModel):
 
 class AgentChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
-    history: list[AgentMessage] = Field(default_factory=list)
+    history: list[AgentMessage] = Field(default_factory=list, max_length=40)
 
 
 class AgentKpiItem(BaseModel):

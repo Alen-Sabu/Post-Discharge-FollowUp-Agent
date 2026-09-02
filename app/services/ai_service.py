@@ -232,32 +232,32 @@ def extract_from_structured_result(
 def extract_with_llm(transcript: str) -> tuple[dict[str, Any], str]:
     """
     Ask LLM for clinical facts only.
-    Primary: Gemini. Secondary: Claude.
+    Primary: Claude. Secondary: Gemini.
     Do NOT ask either model for the final risk label.
     """
     if not transcript.strip():
         return extract_from_structured_result(None), "rules"
 
-    gemini_error: Exception | None = None
+    claude_error: Exception | None = None
+
+    if settings.anthropic_api_key:
+        try:
+            parsed = extract_facts_with_claude(transcript)
+            return extract_from_structured_result(parsed), "claude"
+        except Exception as exc:
+            claude_error = exc
 
     if settings.google_api_key:
         try:
             parsed = extract_facts_with_gemini(transcript)
             return extract_from_structured_result(parsed), "gemini"
-        except Exception as exc:
-            gemini_error = exc
-
-    if settings.anthropic_api_key:
-        try:
-            parsed = extract_facts_with_claude(transcript)
-            return extract_from_structured_result(parsed), "claude_fallback"
-        except Exception as claude_error:
+        except Exception as gemini_error:
             raise RuntimeError(
-                "Gemini and Claude clinical extraction both failed"
-            ) from claude_error
+                "Claude and Gemini clinical extraction both failed"
+            ) from gemini_error
 
-    if gemini_error is not None:
-        raise RuntimeError("Gemini clinical extraction failed") from gemini_error
+    if claude_error is not None:
+        raise RuntimeError("Claude clinical extraction failed") from claude_error
 
     raise RuntimeError("No clinical extraction provider configured")
 

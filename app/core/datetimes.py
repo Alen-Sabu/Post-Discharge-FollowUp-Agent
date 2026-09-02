@@ -7,9 +7,8 @@ def utc_now_naive() -> datetime:
 
 
 def to_naive_utc(value: datetime | None) -> datetime:
-    """Normalize a datetime to naive UTC so Postgres TIMESTAMP does not shift to IST."""
     if value is None:
         return utc_now_naive()
     if value.tzinfo is None:
-        value = value.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)

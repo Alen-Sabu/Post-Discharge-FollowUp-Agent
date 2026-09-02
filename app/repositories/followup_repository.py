@@ -1,8 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy.orm import Session
-
 from app.models.orm import FollowUp
+from sqlalchemy.orm import Session
 
 
 class FollowUpRepository:
