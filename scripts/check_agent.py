@@ -18,6 +18,10 @@ try:
         AgentToolEvent("get_patient_detail", repo.get_patient_detail("Test Patient")),
         AgentToolEvent("get_patient_detail", repo.get_patient_detail("1")),
         AgentToolEvent("get_patient_detail", repo.get_patient_detail("Missing Person")),
+        AgentToolEvent("get_patient_detail", repo.get_patient_detail("+919876543210")),
+        AgentToolEvent("get_patient_detail", repo.get_patient_detail("9876543210")),
+        AgentToolEvent("get_patient_detail", repo.get_patient_detail("")),
+        AgentToolEvent("list_patients", repo.list_patients()),
         AgentToolEvent("get_emergency_patients", repo.get_emergency_patients()),
         AgentToolEvent("get_overdue_followups", repo.get_overdue_followups()),
         AgentToolEvent(
@@ -38,6 +42,10 @@ try:
         ),
         AgentToolEvent(
             "get_overdue_followups",
+            {"count": 0, "patients": []},
+        ),
+        AgentToolEvent(
+            "list_patients",
             {"count": 0, "patients": []},
         ),
     ]
@@ -77,6 +85,12 @@ try:
     assert any(
         block.type == "patient_table"
         and block.title == "Overdue follow-ups"
+        and block.count == 0
+        for block in blocks
+    )
+    assert any(
+        block.type == "patient_table"
+        and block.title == "Patients"
         and block.count == 0
         for block in blocks
     )

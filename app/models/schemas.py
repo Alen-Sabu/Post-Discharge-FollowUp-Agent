@@ -511,6 +511,7 @@ class AgentEmergencyListBlock(BaseModel):
 class AgentPatientDetailItem(BaseModel):
     patient_id: int
     name: str
+    phone: str | None = None
     age: int | None = None
     gender: str | None = None
     doctor_name: str | None = None

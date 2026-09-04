@@ -176,6 +176,29 @@ def _risk_block(result: dict[str, Any]) -> AgentPatientTableBlock:
     )
 
 
+def _list_patients_block(result: dict[str, Any]) -> AgentPatientTableBlock:
+    rows = result.get("patients")
+    patients = rows if isinstance(rows, list) else []
+    count = int(result.get("count") or len(patients))
+    description = (
+        "No patients on file"
+        if count == 0
+        else f"{count} patient{'s' if count != 1 else ''} on file"
+    )
+    if count > MAX_BLOCK_ITEMS:
+        description += f" · Showing {MAX_BLOCK_ITEMS} of {count}"
+    return AgentPatientTableBlock(
+        title="Patients",
+        description=description,
+        count=count,
+        items=[
+            _patient_list_item(item)
+            for item in patients[:MAX_BLOCK_ITEMS]
+            if isinstance(item, dict) and item.get("id") is not None
+        ],
+    )
+
+
 def _overdue_block(result: dict[str, Any]) -> AgentPatientTableBlock:
     rows = result.get("patients")
     patients = rows if isinstance(rows, list) else []
@@ -246,6 +269,7 @@ def _patient_detail_blocks(result: dict[str, Any]) -> list[AgentBlock]:
     patient = AgentPatientDetailItem(
         patient_id=int(raw_patient["id"]),
         name=str(raw_patient.get("name") or "Unknown patient"),
+        phone=raw_patient.get("phone"),
         age=raw_patient.get("age"),
         gender=raw_patient.get("gender"),
         doctor_name=raw_patient.get("doctor_name"),
@@ -359,6 +383,8 @@ def build_agent_blocks(events: list[AgentToolEvent]) -> list[AgentBlock]:
             blocks.append(_discharge_block(event.result))
         elif event.name == "get_patients_by_risk":
             blocks.append(_risk_block(event.result))
+        elif event.name == "list_patients":
+            blocks.append(_list_patients_block(event.result))
         elif event.name == "get_patient_detail":
             blocks.extend(_patient_detail_blocks(event.result))
         elif event.name == "get_emergency_patients":
