@@ -267,6 +267,42 @@ class AgentRepository:
                 for c in calls
             ],
         }
+    
+    def get_overdue_followups(self, *, limit: int = 25) -> dict:
+        now = _utcnow()
+        rows = (
+            self.db.query(FollowUp)
+            .options(joinedload(FollowUp.patient).joinedload(Patient.protocol))
+            .filter(
+                FollowUp.status == "pending",
+                FollowUp.scheduled_time < now,
+            )
+            .order_by(FollowUp.scheduled_time.asc())
+            .limit(limit)
+            .all()
+        )
+
+        patients = [
+            {
+                "id": fu.patient.id,
+                "name": fu.patient.name,
+                "risk_level": fu.patient.current_risk_level,
+                "diagnosis": fu.patient.discharge_diagnosis,
+                "protocol": fu.patient.protocol.name if fu.patient.protocol else None,
+                "needs_followup": True,
+                "scheduled_time": (
+                    fu.scheduled_time.isoformat() if fu.scheduled_time else None
+                ),
+                "attempt_count": fu.attempt_count,
+            }
+            for fu in rows
+            if fu.patient is not None
+        ]
+
+        return {
+            "count": len(patients),
+            "patients": patients,
+        }
 
     def search_patients_semantic(self,query: str, limit: int = 5) -> dict:
         vector = embed_text(query)

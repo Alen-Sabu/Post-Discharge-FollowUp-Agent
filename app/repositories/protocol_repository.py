@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from app.models.orm import (
     DiseaseProtocol,
     ProtocolEmergencyKeyword,
@@ -5,7 +7,7 @@ from app.models.orm import (
     ProtocolResultField,
     ProtocolResultFieldEnum,
 )
-from app.models.schemas import DiseaseProtocolCreate
+from app.models.schemas import DiseaseProtocolCreate, DiseaseProtocolUpdate
 from sqlalchemy.orm import Session, selectinload
 
 
@@ -56,7 +58,41 @@ class ProtocolRepository:
             needs_followup_default=payload.needs_followup_default,
             is_active=payload.is_active,
         )
+        self._replace_nested(protocol, payload)
+        self.db.add(protocol)
+        self.db.commit()
+        self.db.refresh(protocol)
+        return self.get_by_id(protocol.id) or protocol
 
+    def update(
+        self, protocol_id: int, payload: DiseaseProtocolUpdate
+    ) -> DiseaseProtocol | None:
+        protocol = self.get_by_id(protocol_id)
+        if protocol is None:
+            return None
+
+        protocol.name = payload.name.strip()
+        protocol.description = (
+            payload.description.strip() if payload.description else None
+        )
+        protocol.needs_followup_default = payload.needs_followup_default
+        protocol.is_active = payload.is_active
+        protocol.updated_at = datetime.utcnow()
+
+        protocol.questions.clear()
+        protocol.emergency_keywords.clear()
+        protocol.result_fields.clear()
+        self.db.flush()
+        self._replace_nested(protocol, payload)
+
+        self.db.commit()
+        return self.get_by_id(protocol.id)
+
+    def _replace_nested(
+        self,
+        protocol: DiseaseProtocol,
+        payload: DiseaseProtocolCreate | DiseaseProtocolUpdate,
+    ) -> None:
         for i, question in enumerate(payload.questions):
             protocol.questions.append(
                 ProtocolQuestion(
@@ -99,8 +135,3 @@ class ProtocolRepository:
                     )
                 )
             protocol.result_fields.append(result_field)
-
-        self.db.add(protocol)
-        self.db.commit()
-        self.db.refresh(protocol)
-        return self.get_by_id(protocol.id) or protocol

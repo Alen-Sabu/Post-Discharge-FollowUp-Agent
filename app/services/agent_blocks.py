@@ -176,6 +176,30 @@ def _risk_block(result: dict[str, Any]) -> AgentPatientTableBlock:
     )
 
 
+def _overdue_block(result: dict[str, Any]) -> AgentPatientTableBlock:
+    rows = result.get("patients")
+    patients = rows if isinstance(rows, list) else []
+    count = int(result.get("count") or len(patients))
+    if count == 0:
+        description = "No overdue follow-ups"
+    else:
+        description = (
+            f"{count} follow-up{'s' if count != 1 else ''} past scheduled time"
+        )
+        if count > MAX_BLOCK_ITEMS:
+            description += f" · Showing {MAX_BLOCK_ITEMS} of {count}"
+    return AgentPatientTableBlock(
+        title="Overdue follow-ups",
+        description=description,
+        count=count,
+        items=[
+            _patient_list_item(item)
+            for item in patients[:MAX_BLOCK_ITEMS]
+            if isinstance(item, dict) and item.get("id") is not None
+        ],
+    )
+
+
 def _patient_detail_blocks(result: dict[str, Any]) -> list[AgentBlock]:
     query = str(result.get("query") or "")
     if result.get("ambiguous") is True:
@@ -339,6 +363,8 @@ def build_agent_blocks(events: list[AgentToolEvent]) -> list[AgentBlock]:
             blocks.extend(_patient_detail_blocks(event.result))
         elif event.name == "get_emergency_patients":
             blocks.append(_emergency_block(event.result))
+        elif event.name == "get_overdue_followups":
+            blocks.append(_overdue_block(event.result))
         elif event.name == "search_patients_semantic":
             blocks.extend(_patient_search_blocks(event.result))
         elif event.name == "search_call_transcripts":

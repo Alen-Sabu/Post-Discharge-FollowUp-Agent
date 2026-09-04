@@ -19,6 +19,7 @@ try:
         AgentToolEvent("get_patient_detail", repo.get_patient_detail("1")),
         AgentToolEvent("get_patient_detail", repo.get_patient_detail("Missing Person")),
         AgentToolEvent("get_emergency_patients", repo.get_emergency_patients()),
+        AgentToolEvent("get_overdue_followups", repo.get_overdue_followups()),
         AgentToolEvent(
             "search_patients_semantic",
             {"unavailable": True, "reason": "Not available right now", "results": []},
@@ -34,6 +35,10 @@ try:
         AgentToolEvent(
             "get_emergency_patients",
             {"count": 0, "emergencies": []},
+        ),
+        AgentToolEvent(
+            "get_overdue_followups",
+            {"count": 0, "patients": []},
         ),
     ]
 
@@ -68,6 +73,12 @@ try:
     )
     assert any(
         block.type == "emergency_list" and block.count == 0 for block in blocks
+    )
+    assert any(
+        block.type == "patient_table"
+        and block.title == "Overdue follow-ups"
+        and block.count == 0
+        for block in blocks
     )
 
     cleaned = normalize_agent_reply("There are **2** patients\n\n## Details")

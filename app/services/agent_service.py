@@ -32,10 +32,11 @@ called returned an error or an "unavailable" flag.
 
 Tool selection guide:
 - Emergency patients or emergency calls -> get_emergency_patients
-- Totals, risk breakdown, overdue follow-ups, pending calls -> get_clinic_overview
+- Totals, risk breakdown, overdue count, pending calls -> get_clinic_overview
+- Who is overdue or missed a follow-up -> get_overdue_followups
 - Recent discharges -> get_discharge_stats
 - Patients at a specific risk level -> get_patients_by_risk
-- One named patient -> get_patient_detail
+- One named patient or each patient detail -> get_patient_detail
 - Free-text clinical description of patients -> search_patients_semantic
 - Symptoms or issues mentioned during calls -> search_call_transcripts
 
@@ -121,6 +122,14 @@ ANTHROPIC_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_emergency_patients",
         "description": "Return recent emergency follow-up calls and related patients.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_overdue_followups",
+        "description": (
+            "Return patients whose follow-up is still pending and past the "
+            "scheduled time."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -434,6 +443,10 @@ class AgentService:
             """Return recent emergency follow-up calls and related patients."""
             return capture("get_emergency_patients", repo.get_emergency_patients())
 
+        def get_overdue_followups() -> dict:
+            """Return patients whose follow-up is still pending and past the scheduled time."""
+            return capture("get_overdue_followups", repo.get_overdue_followups())
+
         def search_patients_semantic(query: str, limit: int = 5) -> dict:
             """Semantic search over patient records for free-text clinical questions."""
             return capture(
@@ -456,6 +469,7 @@ class AgentService:
             get_emergency_patients,
             search_patients_semantic,
             search_call_transcripts,
+            get_overdue_followups,
         ]
 
     def _gemini_history(
