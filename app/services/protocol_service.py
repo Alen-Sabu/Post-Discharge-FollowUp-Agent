@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.orm import DiseaseProtocol, Patient
-from app.models.schemas import DiseaseProtocolCreate, DiseaseProtocolDetail
+from app.models.schemas import (
+    DiseaseProtocolCreate,
+    DiseaseProtocolDetail,
+    DiseaseProtocolUpdate,
+)
 from app.repositories.protocol_repository import ProtocolRepository
 
 ALLOWED_FIELD_TYPES = {"string", "integer", "boolean", "number"}
@@ -31,8 +35,22 @@ class ProtocolService:
         if self.protocols.get_by_code(code):
             raise ProtocolServiceError(f"Protocol code already exists: {code}")
 
-        self._validate_create_payload(payload)
+        self._validate_nested_payload(payload)
         protocol = self.protocols.create(payload.model_copy(update={"code": code}))
+        return DiseaseProtocolDetail.model_validate(protocol).model_copy(
+            update={"result_schema_preview": self.build_result_schema(protocol)}
+        )
+
+    def update(
+        self, protocol_id: int, payload: DiseaseProtocolUpdate
+    ) -> DiseaseProtocolDetail:
+        if not self.protocols.get_by_id(protocol_id):
+            raise ProtocolServiceError("Protocol not found")
+
+        self._validate_nested_payload(payload)
+        protocol = self.protocols.update(protocol_id, payload)
+        if protocol is None:
+            raise ProtocolServiceError("Protocol not found")
         return DiseaseProtocolDetail.model_validate(protocol).model_copy(
             update={"result_schema_preview": self.build_result_schema(protocol)}
         )
@@ -123,7 +141,9 @@ class ProtocolService:
             update={"result_schema_preview": self.build_result_schema(protocol)}
         )
 
-    def _validate_create_payload(self, payload: DiseaseProtocolCreate) -> None:
+    def _validate_nested_payload(
+        self, payload: DiseaseProtocolCreate | DiseaseProtocolUpdate
+    ) -> None:
         if not any(q.question_text.strip() for q in payload.questions):
             raise ProtocolServiceError("At least one question is required")
 

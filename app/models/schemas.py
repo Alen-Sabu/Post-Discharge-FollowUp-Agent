@@ -184,6 +184,20 @@ class DiseaseProtocolCreate(BaseModel):
     )
 
 
+class DiseaseProtocolUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=4000)
+    needs_followup_default: bool = True
+    is_active: bool = True
+    questions: list[ProtocolQuestionCreate] = Field(..., min_length=1, max_length=50)
+    emergency_keywords: list[ProtocolEmergencyKeywordCreate] = Field(
+        default_factory=list, max_length=100
+    )
+    result_fields: list[ProtocolResultFieldCreate] = Field(
+        ..., min_length=1, max_length=50
+    )
+
+
 # --- Patient schemas ---
 
 class PatientCreate(BaseModel):
