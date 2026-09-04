@@ -28,17 +28,25 @@ You are AfterCare Assistant, a clinical operations helper for hospital admins.
 Tool use is mandatory. For any question about counts, lists, statistics, or a
 specific patient, you MUST call the relevant tool first and answer only from its
 result. Never say clinic data or tools are unavailable unless a tool you actually
-called returned an error or an "unavailable" flag.
+called returned an error or an "unavailable" flag. Never say there was a "system
+error" unless a tool result actually contains an error.
 
 Tool selection guide:
+- Unnamed patients ("the patient", "that one patient", "who are my patients")
+  -> list_patients first. If the list has exactly one patient, immediately call
+  get_patient_detail with that numeric id. If several, summarize the list and
+  ask which id. Never guess id 1 from a count of 1.
+- A name, phone number, or numeric id -> get_patient_detail with that string
 - Emergency patients or emergency calls -> get_emergency_patients
 - Totals, risk breakdown, overdue count, pending calls -> get_clinic_overview
 - Who is overdue or missed a follow-up -> get_overdue_followups
 - Recent discharges -> get_discharge_stats
 - Patients at a specific risk level -> get_patients_by_risk
-- One named patient or each patient detail -> get_patient_detail
 - Free-text clinical description of patients -> search_patients_semantic
 - Symptoms or issues mentioned during calls -> search_call_transcripts
+
+Call only the tools needed for the question. Do not call clinic overview,
+emergency, or overdue tools unless the admin asked about those counts or lists.
 
 If get_patient_detail returns ambiguous=true with candidates, list those
 candidates (id, name, risk, diagnosis) and ask the admin which patient id
@@ -105,18 +113,37 @@ ANTHROPIC_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_patient_detail",
         "description": (
-            "Return one patient's demographics, protocol, and recent call "
-            "summaries/symptoms by name or id."
+            "Find one patient by name, phone number, or numeric id. "
+            "Return demographics, protocol, and recent call summaries/symptoms."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "name_or_id": {
                     "type": "string",
-                    "description": "Patient name or numeric id.",
+                    "description": "Patient name, phone number, or numeric id.",
                 },
             },
             "required": ["name_or_id"],
+        },
+    },
+    {
+        "name": "list_patients",
+        "description": (
+            "List patients with id, name, risk, diagnosis, and protocol. "
+            "Use when the admin asks about patients without giving a name, "
+            "phone, or id."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of patients to return.",
+                    "default": 25,
+                },
+            },
+            "required": [],
         },
     },
     {
@@ -436,8 +463,12 @@ class AgentService:
             return capture("get_patients_by_risk", repo.get_patients_by_risk(level))
 
         def get_patient_detail(name_or_id: str) -> dict:
-            """Return one patient's demographics, protocol, and recent call summaries/symptoms by name or id."""
+            """Find one patient by name, phone number, or numeric id."""
             return capture("get_patient_detail", repo.get_patient_detail(name_or_id))
+
+        def list_patients(limit: int = 25) -> dict:
+            """List patients with id, name, risk, diagnosis, and protocol."""
+            return capture("list_patients", repo.list_patients(limit=limit))
 
         def get_emergency_patients() -> dict:
             """Return recent emergency follow-up calls and related patients."""
@@ -466,6 +497,7 @@ class AgentService:
             get_discharge_stats,
             get_patients_by_risk,
             get_patient_detail,
+            list_patients,
             get_emergency_patients,
             search_patients_semantic,
             search_call_transcripts,
