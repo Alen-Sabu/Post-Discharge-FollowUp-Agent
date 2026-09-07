@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.db import SessionLocal
 from app.repositories.agent_repository import AgentRepository
 from app.services.agent_blocks import AgentToolEvent, build_agent_blocks
-from app.services.agent_service import normalize_agent_reply
+from app.services.agent_service import _dedupe_tool_events, normalize_agent_reply
 
 db = SessionLocal()
 try:
@@ -94,6 +94,18 @@ try:
         and block.count == 0
         for block in blocks
     )
+
+    duplicate = AgentToolEvent("list_patients", {"count": 1, "patients": [{"id": 1}]})
+    collapsed = _dedupe_tool_events([duplicate, duplicate])
+    assert len(collapsed) == 1
+    mixed = _dedupe_tool_events(
+        [
+            duplicate,
+            AgentToolEvent("get_patient_detail", {"found": True, "query": "1"}),
+            duplicate,
+        ]
+    )
+    assert [event.name for event in mixed] == ["list_patients", "get_patient_detail"]
 
     cleaned = normalize_agent_reply("There are **2** patients\n\n## Details")
     assert "**" not in cleaned
