@@ -26,6 +26,33 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     _csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    _api_prefixes = (
+        "/auth",
+        "/dashboard",
+        "/agent",
+        "/patients",
+        "/calls",
+        "/webhooks",
+        "/followups",
+        "/protocols",
+        "/health",
+        "/openapi.json",
+    )
+    _ui_csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "media-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'"
+    )
+
+    @classmethod
+    def _is_api_path(cls, path: str) -> bool:
+        return path == "/openapi.json" or path.startswith(cls._api_prefixes)
 
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
@@ -43,8 +70,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "connect-src 'self'; "
                 "frame-ancestors 'none'; base-uri 'none'"
             )
-        else:
+        elif self._is_api_path(request.url.path):
             csp = self._csp
+        else:
+            csp = self._ui_csp
         response.headers.setdefault("Content-Security-Policy", csp)
         if settings.force_https_enabled:
             response.headers.setdefault(

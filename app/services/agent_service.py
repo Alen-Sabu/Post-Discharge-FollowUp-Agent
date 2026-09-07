@@ -291,6 +291,22 @@ def _invoke_tool(fn: Callable[..., dict[str, Any]], tool_input: dict[str, Any]) 
     return fn(**kwargs)
 
 
+def _dedupe_tool_events(events: list[AgentToolEvent]) -> list[AgentToolEvent]:
+    unique: list[AgentToolEvent] = []
+    seen: set[str] = set()
+    for event in events:
+        key = json.dumps(
+            {"name": event.name, "result": event.result},
+            sort_keys=True,
+            default=str,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(event)
+    return unique
+
+
 class AgentServiceError(Exception):
     pass
 
@@ -429,18 +445,18 @@ class AgentService:
         reply: str,
         tool_events: list[AgentToolEvent],
     ) -> AgentChatResponse:
+        events = _dedupe_tool_events(tool_events)
         unique_tools: list[str] = []
         seen: set[str] = set()
-        for event in tool_events:
-            name = event.name
-            if name not in seen:
-                seen.add(name)
-                unique_tools.append(name)
+        for event in events:
+            if event.name not in seen:
+                seen.add(event.name)
+                unique_tools.append(event.name)
 
         return AgentChatResponse(
             reply=normalize_agent_reply(reply),
             tool_calls_used=unique_tools,
-            blocks=build_agent_blocks(tool_events),
+            blocks=build_agent_blocks(events),
         )
 
     def _build_tools(self, tool_events: list[AgentToolEvent]) -> list[Any]:

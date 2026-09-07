@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from app.api.routes import (
     agent,
@@ -24,6 +25,11 @@ from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "static" / "frontend"
+API_ONLY_MESSAGE = {"message": "Post-Discharge Follow-Up Agent"}
 
 logger = logging.getLogger(__name__)
 
@@ -114,10 +120,49 @@ def create_app() -> FastAPI:
             return {"status": "not_ready", "database": "down"}
         return {"status": "ready", "database": "up", "env": settings.app_env}
 
-    @application.get("/", tags=["root"])
-    async def root():
-        return {"message": "Post-Discharge Follow-Up Agent"}
-        
+    _mount_frontend(application)
+
     return application
+
+
+def _safe_frontend_path(relative: str) -> Path | None:
+    if not relative:
+        return None
+    root = FRONTEND_DIR.resolve()
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None
+    return target
+
+
+def _mount_frontend(application: FastAPI) -> None:
+    next_assets = FRONTEND_DIR / "_next"
+    if next_assets.is_dir():
+        application.mount(
+            "/_next",
+            StaticFiles(directory=next_assets),
+            name="next-assets",
+        )
+
+    @application.get("/{full_path:path}")
+    async def frontend(full_path: str):
+        index = FRONTEND_DIR / "index.html"
+        if not index.is_file():
+            return API_ONLY_MESSAGE
+
+        if full_path:
+            direct = _safe_frontend_path(full_path)
+            if direct is not None and direct.is_file():
+                return FileResponse(direct)
+            html = _safe_frontend_path(f"{full_path}.html")
+            if html is not None and html.is_file():
+                return FileResponse(html)
+            nested = _safe_frontend_path(f"{full_path}/index.html")
+            if nested is not None and nested.is_file():
+                return FileResponse(nested)
+
+        return FileResponse(index)
 
 app = create_app()
