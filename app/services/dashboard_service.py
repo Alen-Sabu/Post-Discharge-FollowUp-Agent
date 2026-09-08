@@ -137,11 +137,24 @@ class DashboardService:
                         id=f"emergency-{call.id}",
                         type="emergency",
                         title=f"Emergency flag — {patient_name}",
-                        subtitle=call.summary or call.status,
+                        subtitle=call.status or "emergency",
                         occurred_at=occurred,
                         patient_id=call.patient_id,
                         call_id=call.id,
                         severity=call.risk_level or "critical",
+                    )
+                )
+            elif (call.status or "").lower() == "outcome_unknown":
+                items.append(
+                    DashboardActivityItem(
+                        id=f"call-unknown-{call.id}",
+                        type="call_outcome_unknown",
+                        title=f"Call needs review — {patient_name}",
+                        subtitle="Provider create outcome is unknown",
+                        occurred_at=occurred,
+                        patient_id=call.patient_id,
+                        call_id=call.id,
+                        severity=call.risk_level,
                     )
                 )
             elif (call.status or "").lower() in {"failed", "canceled", "cancelled"}:
@@ -163,7 +176,7 @@ class DashboardService:
                         id=f"call-{call.id}",
                         type="call_completed",
                         title=f"Call update — {patient_name}",
-                        subtitle=call.summary or call.status,
+                        subtitle=call.status,
                         occurred_at=occurred,
                         patient_id=call.patient_id,
                         call_id=call.id,

@@ -269,7 +269,7 @@ def _patient_detail_blocks(result: dict[str, Any]) -> list[AgentBlock]:
     patient = AgentPatientDetailItem(
         patient_id=int(raw_patient["id"]),
         name=str(raw_patient.get("name") or "Unknown patient"),
-        phone=raw_patient.get("phone"),
+        phone=raw_patient.get("phone_masked") or raw_patient.get("phone"),
         age=raw_patient.get("age"),
         gender=raw_patient.get("gender"),
         doctor_name=raw_patient.get("doctor_name"),

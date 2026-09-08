@@ -138,7 +138,7 @@ erDiagram
 ```
 
 - **Protocol** is the clinical contract for a call: what to ask, what to watch for, what structured fields CALL-E must return.
-- **FollowUp** is the work queue (`pending` → `in_progress` → `completed` / `failed`), with `attempt_count` / `max_attempts` (default 3).
+- **FollowUp** is the work queue (`pending` → `in_progress` → `completed` / `failed`), with `attempt_count` / `max_attempts` (default 3). An ambiguous provider create leaves the follow-up `in_progress` for reconciliation.
 - **Call** stores provider id, transcript, summary, `risk_score`, `risk_level`, `is_emergency`.
 - **WebhookEvent** unique on `event_id` so CALL-E retries do not double-score or double-alert.
 - Patient `current_risk_level` only **ratchets up** (low → critical), never down from a later quieter call.
@@ -213,6 +213,7 @@ Risk combines CALL-E structured fields, protocol emergency keywords, and LLM ext
 
 - JWT access + refresh (`/auth/login`, `/auth/register` with `X-Register-Secret`).
 - Live CALL-E requires `consent_on_file`. Dry-run does not.
+- `CALLE_API_KEY` is sent only to `https://api.heycall-e.com`. Any other `CALLE_BASE_URL` is refused.
 - Webhooks: optional signature verify; durable idempotency; failed claims can be retried.
 - Default `DRY_RUN_DEFAULT=true` so a clone does not place real calls.
 - The product summarizes recorded data. It does not diagnose or prescribe.
@@ -257,7 +258,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Create a user with `POST /auth/register` and header `X-Register-Secret` matching `REGISTER_SECRET`, then sign in on `/login`. JWT protects the admin API.
 
-**Live CALL-E** (optional): set `DRY_RUN_DEFAULT=false`, a real `CALLE_API_KEY`, and a public HTTPS `CALLE_WEBHOOK_URL` (for example ngrok) pointing at `/webhooks/calle`. Live calls never go out without consent on file.
+**Live CALL-E** (optional): set `DRY_RUN_DEFAULT=false`, a real `CALLE_API_KEY`, and a public HTTPS `CALLE_WEBHOOK_URL` (for example ngrok) pointing at `/webhooks/calle`. The Bearer key is sent only to `https://api.heycall-e.com`; any other `CALLE_BASE_URL` is refused. Live calls never go out without consent on file.
 
 ## Repo map
 
@@ -274,6 +275,10 @@ Create a user with `POST /auth/register` and header `X-Register-Secret` matching
 ## Safety
 
 - Default is dry-run: no CALL-E request is sent
-- Live calls require `consent_on_file`
+- Live calls require `consent_on_file` and `authorized_destination` matching the exact ASCII E.164 patient phone
+- The scheduler places dry-run follow-ups only; live outreach is `POST /calls/trigger`
+- Sample numbers are reserved fictional E.164 values such as `+15555550100`
+- Logs and the assistant mask phones, transcripts, and clinical text
 - Webhook deliveries are idempotent
+- An ambiguous CALL-E create (timeout, missing id, 5xx) stores the call as `outcome_unknown` and leaves the follow-up `in_progress`. Do not auto-retry; a person must reconcile it.
 - Assistant tools read clinic data only; they do not invent patients

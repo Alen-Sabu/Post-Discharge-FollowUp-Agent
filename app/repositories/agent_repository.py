@@ -4,6 +4,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 from app.core.embeddings import embed_text
+from app.core.redact import mask_phone, redact_clinical, redact_text
 from app.models.orm import (
     Call,
     CallEmbedding,
@@ -119,7 +120,7 @@ class AgentRepository:
                     "id": patient.id,
                     "name": patient.name,
                     "discharge_date": patient.discharge_date.isoformat() if patient.discharge_date else None,
-                    "diagnosis": patient.discharge_diagnosis,
+                    "diagnosis": redact_clinical(patient.discharge_diagnosis),
                     "risk_level": patient.current_risk_level,
                     "protocol": patient.protocol.name if patient.protocol else None,
                 } for patient in patients
@@ -146,7 +147,7 @@ class AgentRepository:
                     "name": p.name,
                     "risk_level": p.current_risk_level,
                     "needs_followup": p.needs_followup,
-                    "diagnosis": p.discharge_diagnosis,
+                    "diagnosis": redact_clinical(p.discharge_diagnosis),
                     "protocol": p.protocol.name if p.protocol else None,
                     "doctor_name": p.doctor_name,
                 }
@@ -160,7 +161,7 @@ class AgentRepository:
             "name": patient.name,
             "risk_level": patient.current_risk_level,
             "needs_followup": patient.needs_followup,
-            "diagnosis": patient.discharge_diagnosis,
+            "diagnosis": redact_clinical(patient.discharge_diagnosis),
             "protocol": patient.protocol.name if patient.protocol else None,
             "doctor_name": patient.doctor_name,
             "discharge_date": (
@@ -234,7 +235,7 @@ class AgentRepository:
         self, matches: list[Patient], *, query: str, kind: str
     ) -> dict:
         if not matches:
-            return {"found": False, "query": query}
+            return {"found": False, "query": redact_text(query)}
 
         unique: list[Patient] = []
         seen: set[int] = set()
@@ -249,7 +250,7 @@ class AgentRepository:
             return {
                 "found": False,
                 "ambiguous": True,
-                "query": query,
+                "query": redact_text(query),
                 "match_count": len(unique),
                 "message": (
                     f"Multiple patients match this {label}. "
@@ -270,11 +271,11 @@ class AgentRepository:
         return {
             "found": True,
             "ambiguous": False,
-            "query": query,
+            "query": redact_text(query),
             "patient": {
                 "id": patient.id,
                 "name": patient.name,
-                "phone": patient.phone,
+                "phone_masked": mask_phone(patient.phone),
                 "age": patient.age,
                 "gender": patient.gender,
                 "doctor_name": patient.doctor_name,
@@ -283,7 +284,7 @@ class AgentRepository:
                     if patient.discharge_date
                     else None
                 ),
-                "diagnosis": patient.discharge_diagnosis,
+                "diagnosis": redact_clinical(patient.discharge_diagnosis),
                 "risk_level": patient.current_risk_level,
                 "needs_followup": patient.needs_followup,
                 "consent_on_file": patient.consent_on_file,
@@ -295,13 +296,13 @@ class AgentRepository:
                     "status": c.status,
                     "risk_level": c.risk_level,
                     "is_emergency": c.is_emergency,
-                    "summary": c.summary,
+                    "summary": redact_clinical(c.summary),
                     "call_start": c.call_start.isoformat() if c.call_start else None,
                     "symptoms": [
                         {
                             "name": s.name,
                             "severity": s.severity,
-                            "note": s.note,
+                            "note": redact_clinical(s.note),
                         }
                         for s in (c.symptoms or [])
                     ],
@@ -328,7 +329,7 @@ class AgentRepository:
                     "patient_id": c.patient_id,
                     "patient_name": c.patient.name if c.patient else None,
                     "risk_level": c.risk_level,
-                    "summary": c.summary,
+                    "summary": redact_clinical(c.summary),
                     "call_start": c.call_start.isoformat() if c.call_start else None,
                     "symptoms": [s.name for s in (c.symptoms or [])],
                 }
@@ -355,7 +356,7 @@ class AgentRepository:
                 "id": fu.patient.id,
                 "name": fu.patient.name,
                 "risk_level": fu.patient.current_risk_level,
-                "diagnosis": fu.patient.discharge_diagnosis,
+                "diagnosis": redact_clinical(fu.patient.discharge_diagnosis),
                 "protocol": fu.patient.protocol.name if fu.patient.protocol else None,
                 "needs_followup": True,
                 "scheduled_time": (
@@ -394,7 +395,7 @@ class AgentRepository:
 
         return {
             "unavailable": False,
-            "query": query,
+            "query": redact_text(query),
             "results": [
                 {
                     "patient_id": row.PatientEmbedding.patient_id,
@@ -408,7 +409,7 @@ class AgentRepository:
                         if row.PatientEmbedding.patient
                         else None
                     ),
-                    "diagnosis": (
+                    "diagnosis": redact_clinical(
                         row.PatientEmbedding.patient.discharge_diagnosis
                         if row.PatientEmbedding.patient
                         else None
@@ -419,7 +420,7 @@ class AgentRepository:
                         and row.PatientEmbedding.patient.protocol
                         else None
                     ),
-                    "context_text": row.PatientEmbedding.context_text,
+                    "context_text": redact_text(row.PatientEmbedding.context_text),
                     "distance": float(row.distance),
                 }
                 for row in rows
@@ -451,7 +452,7 @@ class AgentRepository:
 
         return {
             "unavailable": False,
-            "query": query,
+            "query": redact_text(query),
             "results": [
                 {
                     "call_id": row.CallEmbedding.call_id,
@@ -470,12 +471,12 @@ class AgentRepository:
                         if row.CallEmbedding.call
                         else None
                     ),
-                    "summary": (
+                    "summary": redact_clinical(
                         row.CallEmbedding.call.summary
                         if row.CallEmbedding.call
                         else None
                     ),
-                    "context_text": row.CallEmbedding.context_text,
+                    "context_text": redact_text(row.CallEmbedding.context_text),
                     "distance": float(row.distance),
                 }
                 for row in rows

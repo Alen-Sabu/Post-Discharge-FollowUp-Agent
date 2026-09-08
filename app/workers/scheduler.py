@@ -28,7 +28,11 @@ def process_due_followups() -> None:
             CallRepository(db),
             ProtocolService(ProtocolRepository(db)),
         )
-        service.process_due_followups(dry_run=settings.dry_run_default)
+        logger.info(
+            "Scheduler places dry-run follow-ups only; live calls require "
+            "POST /calls/trigger with authorized_destination"
+        )
+        service.process_due_followups(dry_run=True)
     except Exception:
         logger.exception("Scheduler failed while processing due follow-ups")
     finally:

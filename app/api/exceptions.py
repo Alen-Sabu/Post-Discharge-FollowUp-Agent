@@ -36,7 +36,8 @@ def raise_http_from_followup_error(exc: FollowUpServiceError) -> None:
 
 
 def raise_http_from_webhook_error(exc: WebhookServiceError) -> None:
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    code = getattr(exc, "status_code", status.HTTP_404_NOT_FOUND)
+    raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 def raise_http_from_protocol_error(exc: ProtocolServiceError) -> None:
     detail = str(exc)

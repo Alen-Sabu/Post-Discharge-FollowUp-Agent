@@ -5,13 +5,13 @@ from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from app.core.datetimes import to_naive_utc
+from app.utils.validators import E164_PATTERN, is_supported_e164
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 RiskLevelLiteral = Literal["low", "medium", "high", "critical"]
 FollowUpStatusLiteral = Literal[
     "pending", "in_progress", "completed", "failed", "cancelled"
 ]
-E164_PATTERN = r"^\+[1-9]\d{7,14}$"
 E164_RE = re.compile(E164_PATTERN)
 
 
@@ -204,7 +204,7 @@ class PatientCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     phone: str = Field(
         ...,
-        description="E.164 phone, eg: +15555550100",
+        description="ASCII E.164 phone, eg: +15555550100",
         pattern=E164_PATTERN,
         max_length=32,
     )
@@ -219,13 +219,24 @@ class PatientCreate(BaseModel):
     needs_followup: bool = False
     followup_scheduled_time: datetime | None = None
 
+    @field_validator("phone")
+    @classmethod
+    def validate_patient_phone(cls, value: str) -> str:
+        if not is_supported_e164(value):
+            raise ValueError(
+                "phone must be a supported ASCII E.164 number, eg: +15555550100"
+            )
+        return value
+
     @field_validator("doctor_contact")
     @classmethod
     def validate_doctor_contact(cls, value: str | None) -> str | None:
         if value is None or value == "":
             return None
-        if not E164_RE.match(value):
-            raise ValueError("doctor_contact must be a valid E.164 number")
+        if not is_supported_e164(value):
+            raise ValueError(
+                "doctor_contact must be a supported ASCII E.164 number, eg: +15555550101"
+            )
         return value
 
     @field_validator("followup_scheduled_time")
@@ -280,6 +291,19 @@ class CallTriggerRequest(BaseModel):
     patient_id: int = Field(..., gt=0)
     followup_id: int | None = Field(default=None, gt=0)
     dry_run: bool = True
+    authorized_destination: str | None = Field(default=None, max_length=32)
+
+    @field_validator("authorized_destination")
+    @classmethod
+    def validate_authorized_destination(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not is_supported_e164(value):
+            raise ValueError(
+                "authorized_destination must be a supported ASCII E.164 number, "
+                "eg: +15555550100"
+            )
+        return value
 
 
 class SymptomRead(BaseModel):

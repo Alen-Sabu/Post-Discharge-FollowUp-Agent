@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.datetimes import to_naive_utc, utc_now_naive
+from app.integrations.calle import fetch_call
 from app.models.orm import Call, Symptom
 from app.repositories.call_repository import CallRepository
 from app.repositories.patient_repository import PatientRepository
@@ -32,6 +33,14 @@ TERMINAL_TYPES = {
 
 class WebhookServiceError(Exception):
     """Domain/service error while processing webhooks."""
+
+    def __init__(self, message: str, status_code: int = 404):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _is_dry_run_provider_id(provider_call_id: str) -> bool:
+    return str(provider_call_id).startswith("dryrun_")
 
 
 def _flatten_transcript(data: dict[str, Any]) -> str:
@@ -105,63 +114,41 @@ class WebhookService:
         self.webhook_events = webhook_events
         self.notifications = notifications
 
-    def _find_call(self, data: dict[str, Any]) -> Call | None:
-        metadata = data.get("metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {}
-
-        internal_call_id = metadata.get("internal_call_id")
-        if internal_call_id is not None:
-            try:
-                call = self.calls.get_by_id(int(internal_call_id))
-                if call:
-                    return call
-            except (TypeError, ValueError):
-                pass
-
-        provider_call_id = data.get("id")
-        if provider_call_id:
-            return self.calls.get_by_provider_id(str(provider_call_id))
-
-        return None
-
-    def _metadata(self, data: dict[str, Any]) -> dict[str, Any]:
-        metadata = data.get("metadata", {})
-        return metadata if isinstance(metadata, dict) else {}
-
-    def _internal_call_id(self, data: dict[str, Any]) -> int | None:
-        raw = self._metadata(data).get("internal_call_id")
-        if raw is None:
-            return None
+    def _fetch_snapshot(self, provider_call_id: str) -> dict[str, Any]:
         try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return None
-
-    def _is_doctor_warning(self, data: dict[str, Any]) -> bool:
-        if self._metadata(data).get("purpose") == "doctor_warning":
-            return True
-        provider_call_id = data.get("id")
-        if not provider_call_id:
-            return False
-        return self.notifications.is_warning_call(str(provider_call_id))
+            return fetch_call(provider_call_id)
+        except Exception as exc:
+            raise WebhookServiceError(
+                "failed to fetch call from CALL-E",
+                status_code=502,
+            ) from exc
 
     def process_calle_event(
-        self, event_id: str, event_type: str, data: dict[str, Any]
+        self,
+        event_id: str,
+        event_type: str,
+        provider_call_id: str,
     ) -> dict[str, Any]:
         if event_type not in TERMINAL_TYPES:
             return {"ok": True, "ignored": True, "event_type": event_type}
 
-        if self._is_doctor_warning(data):
+        provider_id = str(provider_call_id or "").strip()
+        if not provider_id:
+            raise WebhookServiceError("provider call id is required", status_code=400)
+
+        if _is_dry_run_provider_id(provider_id):
+            return {"ok": True, "dry_run": True, "event_id": event_id}
+
+        if self.notifications.is_warning_call(provider_id):
             return self._process_doctor_warning_event(
                 event_id=event_id,
                 event_type=event_type,
-                data=data,
+                provider_call_id=provider_id,
             )
 
-        call = self._find_call(data)
+        call = self.calls.get_by_provider_id(provider_id)
         if not call:
-            raise WebhookServiceError("matching call record not found")
+            raise WebhookServiceError("unknown provider call id", status_code=404)
 
         claimed = self.webhook_events.try_claim(
             event_id=event_id,
@@ -172,10 +159,11 @@ class WebhookService:
             return {"ok": True, "duplicate": True, "event_id": event_id}
 
         try:
+            snapshot = self._fetch_snapshot(provider_id)
             result = self._process_claimed_event(
                 event_id=event_id,
                 event_type=event_type,
-                data=data,
+                data=snapshot,
                 call=call,
             )
             self.webhook_events.mark_processed(claimed, call_id=call.id)
@@ -193,9 +181,10 @@ class WebhookService:
         *,
         event_id: str,
         event_type: str,
-        data: dict[str, Any],
+        provider_call_id: str,
     ) -> dict[str, Any]:
-        internal_call_id = self._internal_call_id(data)
+        warning = self.notifications.get_warning_by_provider_id(provider_call_id)
+        internal_call_id = warning.call_id if warning is not None else None
         claimed = self.webhook_events.try_claim(
             event_id=event_id,
             event_type=event_type,
@@ -205,10 +194,11 @@ class WebhookService:
             return {"ok": True, "duplicate": True, "event_id": event_id}
 
         try:
+            snapshot = self._fetch_snapshot(provider_call_id)
             row = self.notifications.mark_warning_call_terminal(
-                provider_call_id=str(data.get("id") or "") or None,
-                internal_call_id=internal_call_id,
-                status=str(data.get("status") or ""),
+                provider_call_id=provider_call_id,
+                internal_call_id=None,
+                status=str(snapshot.get("status") or ""),
                 event_type=event_type,
             )
             self.webhook_events.mark_processed(claimed, call_id=internal_call_id)

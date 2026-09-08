@@ -23,6 +23,7 @@ def trigger_call(
             patient_id=payload.patient_id,
             followup_id=payload.followup_id,
             dry_run=payload.dry_run,
+            authorized_destination=payload.authorized_destination,
         )
     except TriggerError as exc:
         raise_http_from_trigger_error(exc)

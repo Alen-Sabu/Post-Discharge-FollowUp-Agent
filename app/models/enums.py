@@ -14,6 +14,7 @@ class CallStatus(str, Enum):
     FAILED = "failed"
     CANCELED = "canceled"
     DRY_RUN = "dry_run"
+    OUTCOME_UNKNOWN = "outcome_unknown"
 
 
 class RiskLevel(str, Enum):

@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.utils.validators import validate_official_calle_origin
+
 
 class Settings(BaseSettings):
     app_env: Literal["local", "test", "staging", "production"] = "local"
@@ -143,6 +145,13 @@ class Settings(BaseSettings):
                 return json.loads(text)
             return [part.strip() for part in text.split(",") if part.strip()]
         return value
+
+    @field_validator("calle_base_url", mode="before")
+    @classmethod
+    def pin_calle_base_url(cls, value: object) -> str:
+        if value is None or value == "":
+            return validate_official_calle_origin(None)
+        return validate_official_calle_origin(str(value))
 
     @field_validator("log_level", mode="before")
     @classmethod

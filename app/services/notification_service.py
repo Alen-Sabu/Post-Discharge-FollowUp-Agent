@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 
 from app.core.datetimes import utc_now_naive
+from app.core.redact import mask_phone
 from app.integrations import twilio as twilio_client
-from app.integrations.calle import place_warning_call
+from app.integrations.calle import CalleCreateUnknownError, place_warning_call
 from app.models.orm import Call, EmergencyNotification, Patient
 from app.repositories.emergency_notification_repository import (
     EmergencyNotificationRepository,
@@ -60,9 +61,14 @@ class NotificationService:
         )
 
     def is_warning_call(self, provider_call_id: str | None) -> bool:
+        return self.get_warning_by_provider_id(provider_call_id) is not None
+
+    def get_warning_by_provider_id(
+        self, provider_call_id: str | None
+    ) -> EmergencyNotification | None:
         if not provider_call_id:
-            return False
-        return self.notifications.get_by_provider_id(str(provider_call_id)) is not None
+            return None
+        return self.notifications.get_by_provider_id(str(provider_call_id))
 
     def mark_warning_call_terminal(
         self,
@@ -107,7 +113,11 @@ class NotificationService:
             row.status = "dry_run"
             row.last_error = None
             self.notifications.save(row)
-            logger.info("Dry-run emergency SMS for call %s to %s", row.call_id, to_number)
+            logger.info(
+                "Dry-run emergency SMS for call %s to %s",
+                row.call_id,
+                mask_phone(to_number),
+            )
             return
 
         try:
@@ -136,13 +146,13 @@ class NotificationService:
         to_number: str,
         dry_run: bool,
     ) -> None:
-        if row.status in {"queued", "sent", "dry_run", "skipped"}:
+        if row.status in {"queued", "sent", "dry_run", "skipped", "outcome_unknown"}:
             return
 
         if not is_valid_e164(to_number):
             logger.warning(
                 "Doctor contact %s is not E.164; skipped warning call for call %s",
-                to_number,
+                mask_phone(to_number),
                 call.id,
             )
             self._mark_skipped(row, "Doctor contact is not a valid E.164 number")
@@ -171,6 +181,14 @@ class NotificationService:
                 result.status,
                 result.dry_run,
             )
+        except CalleCreateUnknownError as exc:
+            logger.warning(
+                "Ambiguous CALL-E warning create for call %s; not retrying",
+                call.id,
+            )
+            row.status = "outcome_unknown"
+            row.last_error = str(exc)[:4000]
+            self.notifications.save(row)
         except Exception as exc:
             logger.exception("Doctor warning call failed for call %s", call.id)
             row.status = "failed"
@@ -178,7 +196,7 @@ class NotificationService:
             self.notifications.save(row)
 
     def _mark_skipped(self, row: EmergencyNotification, reason: str) -> None:
-        if row.status in {"sent", "queued", "dry_run"}:
+        if row.status in {"sent", "queued", "dry_run", "outcome_unknown"}:
             return
         row.status = "skipped"
         row.last_error = reason

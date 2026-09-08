@@ -1,18 +1,28 @@
+import hmac
 import logging
 
 from app.core.datetimes import utc_now_naive
-from app.integrations.calle import place_call
+from app.integrations.calle import CalleCreateUnknownError, place_call
 from app.models.orm import Call
 from app.repositories.call_repository import CallRepository
 from app.repositories.followup_repository import FollowUpRepository
 from app.repositories.patient_repository import PatientRepository
 from app.services.protocol_service import ProtocolService
+from app.utils.validators import is_supported_e164
 
 logger = logging.getLogger(__name__)
 
 
 class TriggerError(Exception):
     """Domain error while triggering a follow-up call."""
+
+
+def _destinations_match(left: str, right: str) -> bool:
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    if len(left) != len(right):
+        return False
+    return hmac.compare_digest(left, right)
 
 
 class CallService:
@@ -34,6 +44,7 @@ class CallService:
         patient_id: int,
         followup_id: int | None = None,
         dry_run: bool = True,
+        authorized_destination: str | None = None,
     ) -> Call:
         patient = self.patients.get_by_id(patient_id)
         if not patient:
@@ -47,6 +58,20 @@ class CallService:
 
         if not patient.consent_on_file and not dry_run:
             raise TriggerError("Patient has not provided consent")
+
+        if not dry_run:
+            if not authorized_destination:
+                raise TriggerError(
+                    "Live calls require authorized_destination set to the exact patient phone"
+                )
+            if not is_supported_e164(authorized_destination):
+                raise TriggerError(
+                    "authorized_destination must be a supported ASCII E.164 number"
+                )
+            if not _destinations_match(authorized_destination, patient.phone):
+                raise TriggerError(
+                    "authorized_destination does not match the patient phone"
+                )
 
         try:
             protocol = self.protocols.get_for_patient(patient)
@@ -74,6 +99,14 @@ class CallService:
                 dry_run=dry_run,
                 internal_call_id=call.id,
             )
+        except CalleCreateUnknownError:
+            call.status = "outcome_unknown"
+            logger.warning(
+                "Ambiguous CALL-E create for call id=%s followup=%s; not retrying",
+                call.id,
+                followup.id if followup else None,
+            )
+            return self.calls.save(call)
         except Exception as exc:
             call.status = "failed"
             self.calls.save(call)
@@ -93,7 +126,12 @@ class CallService:
             raise TriggerError("call not found")
         return call
 
-    def process_due_followups(self, *, dry_run: bool) -> None:
+    def process_due_followups(self, *, dry_run: bool = True) -> None:
+        if not dry_run:
+            logger.warning(
+                "Scheduler cannot place live calls; forcing dry_run=true"
+            )
+        dry_run = True
         now = utc_now_naive()
         due = self.followups.get_due(now, limit=20)
 
@@ -113,6 +151,14 @@ class CallService:
                     followup_id=followup.id,
                     dry_run=dry_run,
                 )
+                if call.status == "outcome_unknown":
+                    logger.warning(
+                        "Ambiguous provider create for followup=%s patient=%s call=%s; leaving in_progress",
+                        followup.id,
+                        followup.patient_id,
+                        call.id,
+                    )
+                    continue
                 followup.status = "completed"
                 self.followups.save(followup)
                 logger.info(
